@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import uuid
 from collections.abc import Iterator
@@ -9,6 +10,8 @@ from pathlib import Path
 from ...schemas import AgentRunResult
 from ..event_service import append_event
 from ..workspace_service import now_iso
+
+logger = logging.getLogger("agent_deliberation.claude")
 
 
 def _extract_claude_message(event: dict) -> str | None:
@@ -57,6 +60,8 @@ def stream_claude(
     ]
     if session_id:
         cmd.extend(["--resume", session_id])
+
+    logger.info("[claude] run_id=%s cmd=%s cwd=%s", run_id, " ".join(cmd), workspace)
 
     yield {
         "type": "run.started",

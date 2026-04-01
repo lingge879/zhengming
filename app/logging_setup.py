@@ -29,3 +29,8 @@ def setup_logging() -> None:
     )
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
+
+    # Also output to terminal (stderr)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)

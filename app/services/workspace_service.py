@@ -47,7 +47,6 @@ def topic_path(slug: str) -> Path:
 
 def ensure_topics_dir() -> None:
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
-    LEGACY_TOPICS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def read_text(path: Path) -> str:

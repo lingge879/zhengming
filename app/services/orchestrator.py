@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -14,6 +15,8 @@ from .session_service import load_sessions, update_session
 from .state_service import advance_speaker, load_state, save_state, set_speaker_order
 from .topic_service import sync_topic_index
 from .workspace_service import now_iso, workspace_files
+
+logger = logging.getLogger("agent_deliberation.orchestrator")
 
 
 _TOPIC_RUN_LOCKS: dict[str, Lock] = {}
@@ -147,8 +150,10 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         "turn_no": state["turn_no"],
         "session_id": session_id,
     }
+    logger.info("[%s] orchestrator.started agent=%s turn=%s session=%s", slug, agent, state["turn_no"], session_id)
 
     prompt, _, delivered_upto = build_agent_prompt(slug, agent)
+    logger.info("[%s] >>> PROMPT to %s:\n%s", slug, agent, prompt)
     update_session(slug, agent, last_delivered_message_id=delivered_upto, status="running")
     iterator = (
         stream_codex(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id)
@@ -201,6 +206,7 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
     )
     state = advance_speaker(slug)
     sync_topic_index(slug)
+    logger.info("[%s] orchestrator.completed agent=%s message_len=%d next=%s", slug, agent, len(result.message or ""), state["current_speaker"])
     yield {
         "type": "orchestrator.completed",
         "agent": agent,

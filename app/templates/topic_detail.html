@@ -31,6 +31,15 @@
                 <div class="message-meta">
                   <strong>{{ name_map.get(message.speaker_id, message.speaker_id) }}</strong>
                   <span>{{ message.created_at }}</span>
+                  <button class="copy-btn" title="复制内容">
+                    <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5"></path>
+                    </svg>
+                  </button>
                 </div>
                 <div class="message-content">{{ message.content }}</div>
               </div>
@@ -66,7 +75,9 @@
   <script id="initial-events-json" type="application/json">{{ events | tojson }}</script>
 
   <script>
-    const topicSlug = document.querySelector(".chat-shell").dataset.topicSlug;
+    const chatShell = document.querySelector(".chat-shell");
+    const topicSlug = chatShell.dataset.topicSlug;
+    const topbar = document.querySelector(".chat-topbar");
     const initialEvents = JSON.parse(document.getElementById("initial-events-json").textContent);
     const messageStream = document.getElementById("messageStream");
     const runStatus = document.getElementById("runStatus");
@@ -90,6 +101,8 @@
     let inlineProcessHost = null;
     let pendingAgentState = null;
     let preservedFailureBubble = null;
+    let lastMessageScrollTop = 0;
+    let topbarHidden = false;
 
     const DISPLAY_NAMES = { user: "User", codex: "Codex", claudecode: "ClaudeCode" };
     function displayName(id) { return DISPLAY_NAMES[id] || id; }
@@ -186,6 +199,12 @@
       return isOpen ? "收起过程" : "查看过程";
     }
 
+    function setTopbarHidden(hidden) {
+      if (topbarHidden === hidden) return;
+      topbarHidden = hidden;
+      chatShell.classList.toggle("topbar-hidden", hidden);
+    }
+
     function resizeComposer() {
       if (!userMessageInput) return;
       userMessageInput.style.height = "0px";
@@ -207,9 +226,12 @@
             <strong>${escapeHtml(displayName(speaker))}</strong>
             <span>${escapeHtml(timestamp || "处理中")}</span>
             <button class="copy-btn" title="复制内容">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"></path>
               </svg>
             </button>
           </div>
@@ -231,18 +253,6 @@
           summaryNode.textContent = processNode.classList.contains("is-live")
             ? "生成过程"
             : processToggleLabel(processNode.open);
-        });
-      }
-      // Copy button
-      const copyBtn = row.querySelector(".copy-btn");
-      if (copyBtn) {
-        copyBtn.addEventListener("click", function() {
-          const contentEl = row.querySelector(".message-content");
-          if (!contentEl) return;
-          navigator.clipboard.writeText(contentEl.innerText).then(function() {
-            copyBtn.classList.add("copied");
-            setTimeout(function() { copyBtn.classList.remove("copied"); }, 1500);
-          });
         });
       }
       messageStream.scrollTop = messageStream.scrollHeight;
@@ -846,7 +856,52 @@
       node.innerHTML = renderMarkdown(node.textContent || "");
     });
 
+    messageStream.addEventListener("click", async (event) => {
+      const copyBtn = event.target.closest(".copy-btn");
+      if (!copyBtn) return;
+
+      const row = copyBtn.closest(".message-row");
+      const contentEl = row?.querySelector(".message-content");
+      if (!contentEl) return;
+
+      try {
+        await navigator.clipboard.writeText(contentEl.innerText);
+        copyBtn.classList.add("copied");
+        copyBtn.title = "已复制";
+        window.setTimeout(() => {
+          copyBtn.classList.remove("copied");
+          copyBtn.title = "复制内容";
+        }, 1500);
+      } catch (error) {
+        copyBtn.title = "复制失败";
+        window.setTimeout(() => {
+          copyBtn.title = "复制内容";
+        }, 1500);
+      }
+    });
+
+    messageStream.addEventListener("scroll", () => {
+      const currentTop = messageStream.scrollTop;
+      const delta = currentTop - lastMessageScrollTop;
+
+      if (currentTop <= 24) {
+        setTopbarHidden(false);
+      } else if (delta > 12) {
+        setTopbarHidden(true);
+      } else if (delta < -12) {
+        setTopbarHidden(false);
+      }
+
+      lastMessageScrollTop = currentTop;
+    });
+
     userMessageInput.addEventListener("input", resizeComposer);
+    userMessageInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        roundForm.requestSubmit();
+      }
+    });
     renderOrderChips();
     syncComposerControls();
     resizeComposer();

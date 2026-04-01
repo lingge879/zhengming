@@ -343,12 +343,37 @@ body.chat-body {
   border-bottom: 2px solid var(--jade);
   flex: 0 0 auto;
   position: relative;
+  max-height: 72px;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    max-height 220ms ease,
+    padding-bottom 220ms ease,
+    margin-bottom 220ms ease,
+    opacity 180ms ease,
+    transform 220ms ease,
+    border-color 180ms ease;
 }
 .chat-topbar-full::after {
   content: "";
   position: absolute; bottom: -4px; left: 0; right: 0;
   height: 1px;
   background: var(--jade-light);
+  transition: opacity 180ms ease;
+}
+.chat-shell.topbar-hidden .chat-topbar,
+.chat-shell.topbar-hidden .chat-topbar-full {
+  max-height: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+  opacity: 0;
+  transform: translateY(-8px);
+  border-color: transparent;
+  pointer-events: none;
+}
+.chat-shell.topbar-hidden .chat-topbar-full::after {
+  opacity: 0;
 }
 
 .topbar-main {
@@ -448,12 +473,23 @@ body.chat-body {
   cursor: pointer; padding: 2px;
   color: var(--line);
   margin-left: auto;
+  display: inline-grid;
+  place-items: center;
   opacity: 0;
   transition: opacity 150ms, color 150ms;
+}
+.copy-btn .icon-copy,
+.copy-btn .icon-check {
+  grid-area: 1 / 1;
+}
+.copy-btn .icon-check {
+  display: none;
 }
 .message-bubble:hover .copy-btn { opacity: 0.6; }
 .copy-btn:hover { opacity: 1; color: var(--bronze); }
 .copy-btn.copied { opacity: 1; color: var(--jade); }
+.copy-btn.copied .icon-copy { display: none; }
+.copy-btn.copied .icon-check { display: block; }
 
 .message-content { line-height: 1.7; font-size: 14px; }
 .message-content p, .message-content ul, .message-content ol,

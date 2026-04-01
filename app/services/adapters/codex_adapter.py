@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import tempfile
 import uuid
@@ -10,6 +11,8 @@ from pathlib import Path
 from ...schemas import AgentRunResult
 from ..event_service import append_event
 from ..workspace_service import now_iso
+
+logger = logging.getLogger("agent_deliberation.codex")
 
 
 def _extract_thread_id(event: dict) -> str | None:
@@ -54,6 +57,8 @@ def stream_codex(
     ]
     if session_id:
         cmd.extend(["resume", session_id])
+
+    logger.info("[codex] run_id=%s cmd=%s cwd=%s", run_id, " ".join(cmd), workspace)
 
     yield {
         "type": "run.started",
