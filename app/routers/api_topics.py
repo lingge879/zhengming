@@ -22,9 +22,8 @@ from ..services.workspace_service import (
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
 
-def _build_session_slug(content: str) -> str:
-    base = content.strip().splitlines()[0][:36]
-    return slugify(f"{base}-{int(time.time() * 1000)}")
+def _build_session_slug() -> str:
+    return f"session-{int(time.time() * 1000)}"
 
 
 def _normalize_agent_order(raw: str) -> list[str]:
@@ -60,7 +59,7 @@ def start_session_action(
         raise HTTPException(status_code=400, detail="首条消息不能为空")
 
     title = normalized.splitlines()[0].strip()[:80] or "新会话"
-    slug = _build_session_slug(normalized)
+    slug = _build_session_slug()
     selected_agents = _normalize_agent_order(agent_order)
     try:
         create_topic(title=title, slug=slug, description="")

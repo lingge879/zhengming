@@ -34,7 +34,7 @@
 
 ```bash
 cd /Users/item_admin/workspace/project/agent-deliberation-system
-uvicorn run:app --host 127.0.0.1 --port 8765
+uvicorn run:app --host 127.0.0.1 --port 8765 --reload
 ```
 
 浏览器打开：

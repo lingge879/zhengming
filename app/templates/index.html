@@ -7,16 +7,22 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=chunqiu02" />
+  <link rel="stylesheet" href="/static/style.css?v=chunqiu03" />
 </head>
 <body class="home-body">
+
   <main class="page">
+    <div class="home-seal">论</div>
+
     <section class="home-header">
       <h1>百家争鸣</h1>
-      <p>诸子论道，以辩明理 —— 输入议题，诸子即刻开讲。</p>
+      <p>诸子论道，以辩明理</p>
     </section>
 
+    <p class="cloud-divider">○ ○ ○</p>
+
     <section class="home-composer">
+      <span class="home-composer-label">起论</span>
       <form method="post" action="/api/topics/start-session" class="home-composer-form" id="homeStartForm">
         <div class="home-agent-row">
           <div class="order-chips compact-order-chips" id="homeAgentChips">
@@ -37,7 +43,7 @@
             name="content"
             id="homeMessageInput"
             rows="5"
-            placeholder="例如：cq4 四步法现在太复杂，怎么把本体构建流程收敛成一个更容易推进的方案？"
+            placeholder="昔齐桓公问管仲：何以治天下？—— 抛出你的议题，诸子自来论之。"
             required
           ></textarea>
         </div>
@@ -48,6 +54,8 @@
       </form>
     </section>
 
+    <p class="cloud-divider">○ ○ ○</p>
+
     <section class="home-list">
       <div class="home-list-head">
         <h2>往期论题</h2>
@@ -57,7 +65,7 @@
         {% for topic in topics %}
         <a class="topic-card" href="/topics/{{ topic.slug }}">
           <strong>{{ topic.title }}</strong>
-          <span>{{ topic.current_speaker }} \u00b7 第 {{ topic.turn_no }} 轮</span>
+          <span>{{ topic.current_speaker }} &middot; 第 {{ topic.turn_no }} 轮</span>
           <span>{{ topic.updated_at }}</span>
         </a>
         {% endfor %}
@@ -69,29 +77,28 @@
   </main>
 
   <script>
-    const homeMessageInput = document.getElementById("homeMessageInput");
-    const homeAgentOrder = document.getElementById("homeAgentOrder");
-    const homeAgentChips = Array.from(document.querySelectorAll("#homeAgentChips .order-chip"));
+    var homeMessageInput = document.getElementById("homeMessageInput");
+    var homeAgentOrder = document.getElementById("homeAgentOrder");
+    var homeAgentChips = Array.from(document.querySelectorAll("#homeAgentChips .order-chip"));
 
     function resizeHomeComposer() {
       homeMessageInput.style.height = "0px";
-      const nextHeight = Math.min(Math.max(homeMessageInput.scrollHeight, 128), 220);
-      homeMessageInput.style.height = `${nextHeight}px`;
+      var nextHeight = Math.min(Math.max(homeMessageInput.scrollHeight, 128), 220);
+      homeMessageInput.style.height = nextHeight + "px";
     }
 
     function syncHomeAgentSelection() {
-      const selected = homeAgentChips.filter((chip) => chip.classList.contains("is-selected"));
-      homeAgentChips.forEach((chip, index) => {
+      var selected = homeAgentChips.filter(function(c) { return c.classList.contains("is-selected"); });
+      homeAgenhomeAgentChips.forEach(function(chip) {
         chip.querySelector(".order-index").textContent = chip.classList.contains("is-selected")
-          ? String(selected.indexOf(chip) + 1)
-          : "\u00b7";
+          ? String(selected.indexOf(chip) + 1) : "\u00b7";
       });
-      homeAgentOrder.value = selected.map((chip) => chip.dataset.agent).join(",");
+      homeAgentOrder.value = selected.map(function(c) { return c.dataset.agent; }).join(",");
     }
 
-    homeAgentChips.forEach((chip) => {
-      chip.addEventListener("click", () => {
-        const selected = homeAgentChips.filter((node) => node.classList.contains("is-selected"));
+homeAgentChips.forEach(function(chip) {
+      chip.addEventListener("click", function() {
+        var selected = homeAgentChips.filter(function(n) { return n.classList.contains("is-selected"); });
         if (chip.classList.contains("is-selected") && selected.length === 1) return;
         chip.classList.toggle("is-selected");
         syncHomeAgentSelection();
