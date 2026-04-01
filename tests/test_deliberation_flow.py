@@ -83,6 +83,36 @@ def test_build_agent_prompt_uses_unread_messages_per_agent():
         _cleanup_topic(slug)
 
 
+def test_build_agent_prompt_reuses_pending_delivery_window():
+    slug = _unique_slug("pending-delivery")
+    try:
+        create_topic("Pending Delivery", slug, "test")
+        first = append_message(slug, "user", "u1")
+        second = append_message(slug, "codex", "c1")
+        third = append_message(slug, "user", "u2")
+        append_message(slug, "claudecode", "k1")
+
+        from app.services.session_service import update_session
+
+        update_session(
+            slug,
+            "codex",
+            last_read_message_id=first["id"],
+            last_delivered_message_id=third["id"],
+            status="error",
+        )
+
+        prompt, unread, delivered = orchestrator.build_agent_prompt(slug, "codex")
+        assert [(item["speaker_id"], item["content"]) for item in unread] == [
+            ("codex", "c1"),
+            ("user", "u2"),
+        ]
+        assert delivered == third["id"]
+        assert "k1" not in prompt
+    finally:
+        _cleanup_topic(slug)
+
+
 def test_stream_full_round_advances_with_stub_agents(monkeypatch):
     slug = _unique_slug("round-stub")
     try:

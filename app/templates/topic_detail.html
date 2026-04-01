@@ -23,12 +23,13 @@
       <section class="conversation-layout">
         <section class="message-panel panel-surface panel-surface-full">
           <div class="message-stream" id="messageStream">
+            {% set name_map = {'user': 'User', 'codex': 'Codex', 'claudecode': 'ClaudeCode'} %}
             {% for message in messages %}
             <article class="message-row speaker-{{ message.speaker_id|lower }}">
-              <div class="avatar">{{ message.speaker_id[:1]|upper }}</div>
+              <div class="avatar">{{ name_map.get(message.speaker_id, message.speaker_id)[:1] }}</div>
               <div class="message-bubble">
                 <div class="message-meta">
-                  <strong>{{ message.speaker_id }}</strong>
+                  <strong>{{ name_map.get(message.speaker_id, message.speaker_id) }}</strong>
                   <span>{{ message.created_at }}</span>
                 </div>
                 <div class="message-content">{{ message.content }}</div>
@@ -40,10 +41,11 @@
           <section class="composer-shell composer-shell-full">
             <div class="composer-toolbar composer-toolbar-full">
               <div class="order-chips compact-order-chips" id="orderChips">
-                {% for speaker in topic.state.speaker_order if speaker != 'user' %}
-                <button type="button" class="order-chip is-selected" data-agent="{{ speaker }}">
-                  <span class="order-index">{{ loop.index }}</span>
-                  <span>{{ speaker }}</span>
+                {% set active_agents = topic.state.speaker_order | reject('equalto', 'user') | list %}
+                {% for agent in ['codex', 'claudecode'] %}
+                <button type="button" class="order-chip{{ ' is-selected' if agent in active_agents else '' }}" data-agent="{{ agent }}">
+                  <span class="order-index">{{ active_agents.index(agent) + 1 if agent in active_agents else '·' }}</span>
+                  <span>{{ agent }}</span>
                 </button>
                 {% endfor %}
               </div>
@@ -74,8 +76,13 @@
     const sendRoundButton = document.getElementById("sendRoundButton");
     const defaultComposerPlaceholder = "直抒己见，发送后诸子依序论之。";
 
-    let agentOrder = Array.from(orderChips.querySelectorAll(".order-chip")).map((node) => node.dataset.agent);
-    let selectedAgentSet = new Set(agentOrder);
+    let allAgents = Array.from(orderChips.querySelectorAll(".order-chip")).map((node) => node.dataset.agent);
+    let agentOrder = allAgents.slice();
+    let selectedAgentSet = new Set(
+      Array.from(orderChips.querySelectorAll(".order-chip.is-selected")).map((node) => node.dataset.agent)
+    );
+    // Build selection order from initially selected chips
+    let selectionOrder = Array.from(orderChips.querySelectorAll(".order-chip.is-selected")).map((node) => node.dataset.agent);
     let pendingAgentBubble = null;
     let autoContinuing = false;
     let roundRunning = false;
@@ -83,6 +90,9 @@
     let inlineProcessHost = null;
     let pendingAgentState = null;
     let preservedFailureBubble = null;
+
+    const DISPLAY_NAMES = { user: "User", codex: "Codex", claudecode: "ClaudeCode" };
+    function displayName(id) { return DISPLAY_NAMES[id] || id; }
 
     function escapeHtml(text) {
       return String(text ?? "")
@@ -184,18 +194,24 @@
     }
 
     function selectedAgents() {
-      return agentOrder.filter((agent) => selectedAgentSet.has(agent));
+      return selectionOrder.filter((agent) => selectedAgentSet.has(agent));
     }
 
     function renderMessage({ speaker, timestamp, content, pending = false, withProcess = false, markdown = !pending }) {
       const row = document.createElement("article");
       row.className = `message-row speaker-${speaker.toLowerCase()}${pending ? " is-pending" : ""}`;
       row.innerHTML = `
-        <div class="avatar">${escapeHtml(speaker.slice(0, 1).toUpperCase())}</div>
+        <div class="avatar">${escapeHtml(displayName(speaker).slice(0, 1))}</div>
         <div class="message-bubble">
           <div class="message-meta">
-            <strong>${escapeHtml(speaker)}</strong>
+            <strong>${escapeHtml(displayName(speaker))}</strong>
             <span>${escapeHtml(timestamp || "处理中")}</span>
+            <button class="copy-btn" title="复制内容">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
           </div>
           <div class="message-content">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
           ${withProcess ? `
@@ -215,6 +231,18 @@
           summaryNode.textContent = processNode.classList.contains("is-live")
             ? "生成过程"
             : processToggleLabel(processNode.open);
+        });
+      }
+      // Copy button
+      const copyBtn = row.querySelector(".copy-btn");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", function() {
+          const contentEl = row.querySelector(".message-content");
+          if (!contentEl) return;
+          navigator.clipboard.writeText(contentEl.innerText).then(function() {
+            copyBtn.classList.add("copied");
+            setTimeout(function() { copyBtn.classList.remove("copied"); }, 1500);
+          });
         });
       }
       messageStream.scrollTop = messageStream.scrollHeight;
@@ -329,7 +357,7 @@
             if (nested.type === "content_block_delta") {
               const delta = nested.delta || {};
               if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文";
-              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(delta.text, 72)}`;
+              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(pendingAgentState?.textPreview || delta.text, 72)}`;
             }
           }
           return `ClaudeCode 事件：${eventType}`;
@@ -390,7 +418,7 @@
             if (nested.type === "content_block_delta") {
               const delta = nested.delta || {};
               if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文并组织表述。";
-              if (delta.type === "text_delta") return `ClaudeCode 新输出片段：${shorten(delta.text, 180)}`;
+              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(pendingAgentState?.textPreview || delta.text, 180)}`;
             }
           }
         }
@@ -558,11 +586,12 @@
         }
         if (event.type === "assistant") {
           const text = extractClaudeText(event);
-          if (text) {
+          if (text && !state.textPreview) {
+            // Only use full snapshot as fallback when no text_delta has arrived yet
             state.textPreview = text;
             contentNode.textContent = state.textPreview;
-            return;
           }
+          return;
         }
         if (event.type === "stream_event") {
           const nested = event.event || {};
@@ -609,28 +638,29 @@
 
     function renderOrderChips() {
       orderChips.innerHTML = "";
-      agentOrder.forEach((agent, index) => {
+      allAgents.forEach((agent) => {
+        const isSelected = selectedAgentSet.has(agent);
+        const selIdx = selectionOrder.indexOf(agent);
         const chip = document.createElement("button");
         chip.type = "button";
-        chip.className = `order-chip${selectedAgentSet.has(agent) ? " is-selected" : ""}`;
+        chip.className = `order-chip${isSelected ? " is-selected" : ""}`;
         chip.dataset.agent = agent;
         chip.disabled = roundRunning || autoContinuing;
-        chip.innerHTML = `<span class="order-index">${index + 1}</span><span>${escapeHtml(agent)}</span>`;
+        chip.innerHTML = `<span class="order-index">${isSelected ? selIdx + 1 : "·"}</span><span>${escapeHtml(agent)}</span>`;
         chip.addEventListener("click", () => {
           if (roundRunning || autoContinuing) return;
-          const selected = selectedAgents();
-          if (selectedAgentSet.has(agent) && selected.length === 1) return;
-          if (selectedAgentSet.has(agent)) {
+          if (isSelected) {
+            if (selectedAgents().length === 1) return;
             selectedAgentSet.delete(agent);
+            selectionOrder = selectionOrder.filter((a) => a !== agent);
           } else {
             selectedAgentSet.add(agent);
+            selectionOrder.push(agent);
           }
-          syncOrderChipLabels();
           renderOrderChips();
         });
         orderChips.appendChild(chip);
       });
-      syncOrderChipLabels();
     }
 
     function syncOrderChipLabels() {

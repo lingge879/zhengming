@@ -1,4 +1,5 @@
 # CLAUDE
+你是ClaudeCode
 
 请遵守这些原则：
 

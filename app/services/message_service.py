@@ -63,6 +63,27 @@ def list_messages_after(slug: str, message_id: int | None) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_messages_between(
+    slug: str,
+    after_message_id: int | None,
+    upto_message_id: int | None,
+) -> list[dict]:
+    if upto_message_id is None:
+        return []
+    lower_bound = -1 if after_message_id is None else after_message_id
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, topic_slug, speaker_type, speaker_id, content, created_at
+            FROM messages
+            WHERE topic_slug = ? AND id > ? AND id <= ?
+            ORDER BY id ASC
+            """,
+            (slug, lower_bound, upto_message_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def latest_message_id(slug: str) -> int | None:
     with get_conn() as conn:
         row = conn.execute(

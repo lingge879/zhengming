@@ -8,7 +8,7 @@ from ..schemas import AgentRunResult
 from .adapters.claude_adapter import run_claude, stream_claude
 from .adapters.codex_adapter import run_codex, stream_codex
 from .discussion_service import append_message
-from .message_service import list_messages_after
+from .message_service import list_messages_after, list_messages_between
 from .event_service import append_event
 from .session_service import load_sessions, update_session
 from .state_service import advance_speaker, load_state, save_state, set_speaker_order
@@ -55,8 +55,15 @@ def _format_messages_for_prompt(messages: list[dict]) -> str:
 def build_agent_prompt(slug: str, agent: str) -> tuple[str, list[dict], int | None]:
     sessions = load_sessions(slug)
     session = sessions.get(agent, {})
-    unread_messages = list_messages_after(slug, session.get("last_read_message_id"))
-    delivered_upto = unread_messages[-1]["id"] if unread_messages else session.get("last_read_message_id")
+    last_read = session.get("last_read_message_id")
+    last_delivered = session.get("last_delivered_message_id")
+    has_pending_delivery = last_delivered is not None and (last_read is None or last_delivered > last_read)
+    if has_pending_delivery:
+        unread_messages = list_messages_between(slug, last_read, last_delivered)
+        delivered_upto = last_delivered
+    else:
+        unread_messages = list_messages_after(slug, last_read)
+        delivered_upto = unread_messages[-1]["id"] if unread_messages else last_read
     prompt = f"""下面是你尚未读过的新消息。
 
 请基于这些新消息继续当前讨论，直接给出你这一轮要发送的内容。

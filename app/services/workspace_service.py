@@ -161,15 +161,11 @@ def _build_workspace_root() -> Path:
     return candidate
 
 
-def create_topic_workspace(title: str, slug: str, description: str) -> Path:
+def create_topic_workspace(title: str = "", description: str = "") -> tuple[Path, str]:
+    """Create workspace directory. Returns (root_path, actual_slug) where slug = dir name."""
     ensure_topics_dir()
-    legacy_root = LEGACY_TOPICS_DIR / slug
-    if legacy_root.exists():
-        raise FileExistsError(f"topic 已存在: {slug}")
-    workspace_root = WORKSPACES_DIR / slug
-    if workspace_root.exists():
-        raise FileExistsError(f"workspace 已存在: {slug}")
     root = _build_workspace_root()
+    actual_slug = root.name  # Use directory name as slug
     files = {
         "root": root,
         "agents": root / "AGENTS.md",
@@ -185,4 +181,4 @@ def create_topic_workspace(title: str, slug: str, description: str) -> Path:
     write_text(files["agents"], agent_md)
     write_text(files["claude"], claude_md)
 
-    return root
+    return root, actual_slug

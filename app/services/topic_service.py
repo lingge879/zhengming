@@ -63,8 +63,8 @@ def _ensure_topic_row(slug: str) -> None:
         conn.commit()
 
 
-def create_topic(title: str, slug: str, description: str) -> Path:
-    root = create_topic_workspace(title=title, slug=slug, description=description)
+def create_topic(title: str, slug: str = "", description: str = "") -> tuple[Path, str]:
+    root, actual_slug = create_topic_workspace(title=title, description=description)
     ts = now_iso()
     with get_conn() as conn:
         conn.execute(
@@ -76,7 +76,7 @@ def create_topic(title: str, slug: str, description: str) -> Path:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                slug,
+                actual_slug,
                 title,
                 description,
                 "active",
@@ -90,8 +90,8 @@ def create_topic(title: str, slug: str, description: str) -> Path:
             ),
         )
         conn.commit()
-    sync_topic_index(slug)
-    return root
+    sync_topic_index(actual_slug)
+    return root, actual_slug
 
 
 def sync_topic_index(slug: str) -> None:
@@ -169,6 +169,26 @@ def list_topics() -> list[dict]:
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def delete_topic(slug: str) -> None:
+    """Delete a topic: DB records + workspace directory."""
+    import shutil
+    # Read workspace_path before deleting DB row
+    with get_conn() as conn:
+        row = conn.execute("SELECT workspace_path FROM topics WHERE slug = ?", (slug,)).fetchone()
+        workspace = Path(row["workspace_path"]) if row and row["workspace_path"] else None
+        conn.execute("DELETE FROM messages WHERE topic_slug = ?", (slug,))
+        conn.execute("DELETE FROM agent_states WHERE topic_slug = ?", (slug,))
+        conn.execute("DELETE FROM topics WHERE slug = ?", (slug,))
+        conn.commit()
+    # Remove workspace directory
+    if workspace and workspace.exists():
+        shutil.rmtree(workspace, ignore_errors=True)
+    # Also remove legacy topics/ directory if exists
+    legacy = topic_path(slug)
+    if legacy.exists():
+        shutil.rmtree(legacy, ignore_errors=True)
 
 
 def get_topic(slug: str) -> dict:

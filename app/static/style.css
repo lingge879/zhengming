@@ -172,13 +172,8 @@ body.home-body {
   padding: 44px 48px 24px;
   position: relative;
   border: 2px solid var(--bronze);
-}
-.page::before {
-  content: "";
-  position: absolute;
-  inset: 4px;
-  border: 1px solid var(--bronze);
-  pointer-events: none;
+  outline: 1px solid var(--bronze);
+  outline-offset: 4px;
 }
 
 .home-header {
@@ -274,7 +269,12 @@ body.home-body #homeMessageInput:focus {
 }
 
 .topic-list { display: flex; flex-direction: column; gap: 6px; }
+.topic-card-row {
+  display: flex; align-items: stretch; gap: 0;
+  position: relative;
+}
 .topic-card {
+  flex: 1; min-width: 0;
   display: flex; flex-direction: column; gap: 4px;
   text-decoration: none; color: inherit;
   padding: 12px 14px;
@@ -282,15 +282,34 @@ body.home-body #homeMessageInput:focus {
   border: 1px solid var(--line-light);
   border-left: 3px solid var(--bronze);
   border-radius: 2px;
-  transition: transform 150ms, box-shadow 150ms, border-color 150ms;
+  transition: box-shadow 150ms, border-color 150ms;
 }
 .topic-card:hover {
-  transform: translateX(4px);
   box-shadow: var(--shadow);
   border-left-color: var(--vermillion);
 }
 .topic-card strong { font-size: 14px; color: var(--ink); }
 .topic-card span { font-size: 12px; color: var(--muted); }
+.delete-btn {
+  appearance: none; border: 0; cursor: pointer;
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 150ms, background 150ms, color 150ms;
+}
+.topic-card-row:hover .delete-btn {
+  opacity: 0.6;
+}
+.delete-btn:hover {
+  opacity: 1;
+  background: rgba(179, 58, 43, 0.1);
+  color: var(--vermillion);
+}
 
 
 /* ============================================
@@ -424,6 +443,17 @@ body.chat-body {
 .message-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
 .message-meta strong { font-size: 13px; font-weight: 700; color: var(--ink); }
 .message-meta span { color: var(--muted); font-size: 11px; }
+.copy-btn {
+  appearance: none; border: 0; background: transparent;
+  cursor: pointer; padding: 2px;
+  color: var(--line);
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 150ms, color 150ms;
+}
+.message-bubble:hover .copy-btn { opacity: 0.6; }
+.copy-btn:hover { opacity: 1; color: var(--bronze); }
+.copy-btn.copied { opacity: 1; color: var(--jade); }
 
 .message-content { line-height: 1.7; font-size: 14px; }
 .message-content p, .message-content ul, .message-content ol,

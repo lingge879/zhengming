@@ -63,11 +63,14 @@
       {% if topics %}
       <div class="topic-list">
         {% for topic in topics %}
-        <a class="topic-card" href="/topics/{{ topic.slug }}">
-          <strong>{{ topic.title }}</strong>
-          <span>{{ topic.current_speaker }} &middot; 第 {{ topic.turn_no }} 轮</span>
-          <span>{{ topic.updated_at }}</span>
-        </a>
+        <div class="topic-card-row">
+          <a class="topic-card" href="/topics/{{ topic.slug }}">
+            <strong>{{ topic.title }}</strong>
+            <span>{{ topic.current_speaker }} &middot; 第 {{ topic.turn_no }} 轮</span>
+            <span>{{ topic.updated_at }}</span>
+          </a>
+          <button class="delete-btn" data-slug="{{ topic.slug }}" title="删除此论题">✕</button>
+        </div>
         {% endfor %}
       </div>
       {% else %}
@@ -80,6 +83,7 @@
     var homeMessageInput = document.getElementById("homeMessageInput");
     var homeAgentOrder = document.getElementById("homeAgentOrder");
     var homeAgentChips = Array.from(document.querySelectorAll("#homeAgentChips .order-chip"));
+    var selectionOrder = homeAgentChips.filter(function(c) { return c.classList.contains("is-selected"); }).slice();
 
     function resizeHomeComposer() {
       homeMessageInput.style.height = "0px";
@@ -88,19 +92,23 @@
     }
 
     function syncHomeAgentSelection() {
-      var selected = homeAgentChips.filter(function(c) { return c.classList.contains("is-selected"); });
-      homeAgenhomeAgentChips.forEach(function(chip) {
-        chip.querySelector(".order-index").textContent = chip.classList.contains("is-selected")
-          ? String(selected.indexOf(chip) + 1) : "\u00b7";
+      homeAgentChips.forEach(function(chip) {
+        var idx = selectionOrder.indexOf(chip);
+        chip.querySelector(".order-index").textContent = idx >= 0 ? String(idx + 1) : "\u00b7";
       });
-      homeAgentOrder.value = selected.map(function(c) { return c.dataset.agent; }).join(",");
+      homeAgentOrder.value = selectionOrder.map(function(c) { return c.dataset.agent; }).join(",");
     }
 
-homeAgentChips.forEach(function(chip) {
+    homeAgentChips.forEach(function(chip) {
       chip.addEventListener("click", function() {
-        var selected = homeAgentChips.filter(function(n) { return n.classList.contains("is-selected"); });
-        if (chip.classList.contains("is-selected") && selected.length === 1) return;
-        chip.classList.toggle("is-selected");
+        if (chip.classList.contains("is-selected")) {
+          if (selectionOrder.length === 1) return;
+          chip.classList.remove("is-selected");
+          selectionOrder = selectionOrder.filter(function(c) { return c !== chip; });
+        } else {
+          chip.classList.add("is-selected");
+          selectionOrder.push(chip);
+        }
         syncHomeAgentSelection();
       });
     });
@@ -108,6 +116,17 @@ homeAgentChips.forEach(function(chip) {
     homeMessageInput.addEventListener("input", resizeHomeComposer);
     resizeHomeComposer();
     syncHomeAgentSelection();
+
+    document.querySelectorAll(".delete-btn").forEach(function(btn) {
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (!confirm("确定要删除此论题？")) return;
+        var slug = btn.dataset.slug;
+        fetch("/api/topics/" + slug, { method: "DELETE" })
+          .then(function(res) { if (res.ok) btn.closest(".topic-card-row").remove(); })
+          .catch(function(err) { alert("删除失败：" + err.message); });
+      });
+    });
   </script>
 </body>
 </html>
