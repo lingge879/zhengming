@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Deliberation System</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260401d" />
+</head>
+<body class="home-body">
+  <main class="page">
+    <section class="home-header">
+      <h1>统一讨论平台</h1>
+      <p>输入一个起点问题或目标，立即创建会话并进入讨论。</p>
+    </section>
+
+    <section class="home-composer">
+      <form method="post" action="/api/topics/start-session" class="home-composer-form" id="homeStartForm">
+        <div class="home-agent-row">
+          <div class="order-chips compact-order-chips" id="homeAgentChips">
+            <button type="button" class="order-chip is-selected" data-agent="codex">
+              <span class="order-index">1</span>
+              <span>codex</span>
+            </button>
+            <button type="button" class="order-chip is-selected" data-agent="claudecode">
+              <span class="order-index">2</span>
+              <span>claudecode</span>
+            </button>
+          </div>
+          <input type="hidden" name="agent_order" id="homeAgentOrder" value="codex,claudecode" />
+        </div>
+
+        <div class="home-input-stack">
+          <textarea
+            name="content"
+            id="homeMessageInput"
+            rows="5"
+            placeholder="例如：cq4 四步法现在太复杂，怎么把本体构建流程收敛成一个更容易推进的方案？"
+            required
+          ></textarea>
+        </div>
+        <div class="home-submit-row">
+          <p class="home-hint">默认两个 agent 都参与；点击上方可取消某个 agent。</p>
+          <button type="submit" class="primary-button home-submit">开始讨论</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="home-list">
+      <div class="home-list-head">
+        <h2>会话列表</h2>
+      </div>
+      {% if topics %}
+      <div class="topic-list">
+        {% for topic in topics %}
+        <a class="topic-card" href="/topics/{{ topic.slug }}">
+          <strong>{{ topic.title }}</strong>
+          <span>{{ topic.current_speaker }} · 第 {{ topic.turn_no }} 轮</span>
+          <span>{{ topic.updated_at }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">还没有会话。</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+    const homeMessageInput = document.getElementById("homeMessageInput");
+    const homeAgentOrder = document.getElementById("homeAgentOrder");
+    const homeAgentChips = Array.from(document.querySelectorAll("#homeAgentChips .order-chip"));
+
+    function resizeHomeComposer() {
+      homeMessageInput.style.height = "0px";
+      const nextHeight = Math.min(Math.max(homeMessageInput.scrollHeight, 128), 220);
+      homeMessageInput.style.height = `${nextHeight}px`;
+    }
+
+    function syncHomeAgentSelection() {
+      const selected = homeAgentChips.filter((chip) => chip.classList.contains("is-selected"));
+      homeAgentChips.forEach((chip, index) => {
+        chip.querySelector(".order-index").textContent = chip.classList.contains("is-selected")
+          ? String(selected.indexOf(chip) + 1)
+          : "·";
+      });
+      homeAgentOrder.value = selected.map((chip) => chip.dataset.agent).join(",");
+    }
+
+    homeAgentChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const selected = homeAgentChips.filter((node) => node.classList.contains("is-selected"));
+        if (chip.classList.contains("is-selected") && selected.length === 1) return;
+        chip.classList.toggle("is-selected");
+        syncHomeAgentSelection();
+      });
+    });
+
+    homeMessageInput.addEventListener("input", resizeHomeComposer);
+    resizeHomeComposer();
+    syncHomeAgentSelection();
+  </script>
+</body>
+</html>

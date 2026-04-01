@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ topic.state.title }}</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260401d" />
+</head>
+<body class="chat-body">
+  <main class="chat-shell" data-topic-slug="{{ topic.slug }}">
+    <section class="chat-stage chat-stage-full">
+      <header class="chat-topbar chat-topbar-full">
+        <div class="topbar-main">
+          <a class="ghost-link back-link" href="/">返回首页</a>
+          <h1 class="session-title">{{ topic.state.title }}</h1>
+        </div>
+        <p class="run-status" id="runStatus">等待你的下一条消息。</p>
+      </header>
+
+      <section class="conversation-layout">
+        <section class="message-panel panel-surface panel-surface-full">
+          <div class="message-stream" id="messageStream">
+            {% for message in messages %}
+            <article class="message-row speaker-{{ message.speaker_id|lower }}">
+              <div class="avatar">{{ message.speaker_id[:1]|upper }}</div>
+              <div class="message-bubble">
+                <div class="message-meta">
+                  <strong>{{ message.speaker_id }}</strong>
+                  <span>{{ message.created_at }}</span>
+                </div>
+                <div class="message-content">{{ message.content }}</div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+
+          <section class="composer-shell composer-shell-full">
+            <div class="composer-toolbar composer-toolbar-full">
+              <div class="order-chips compact-order-chips" id="orderChips">
+                {% for speaker in topic.state.speaker_order if speaker != 'user' %}
+                <button type="button" class="order-chip is-selected" data-agent="{{ speaker }}">
+                  <span class="order-index">{{ loop.index }}</span>
+                  <span>{{ speaker }}</span>
+                </button>
+                {% endfor %}
+              </div>
+            </div>
+
+            <form class="composer-form" id="roundForm">
+              <textarea name="content" id="userMessageInput" rows="1" placeholder="直接输入你的观点。发送后，两个 AI 会按当前顺序自动连续回复。"></textarea>
+              <div class="composer-actions composer-actions-end">
+                <button type="submit" class="primary-button" id="sendRoundButton">发送</button>
+              </div>
+            </form>
+          </section>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <script id="initial-events-json" type="application/json">{{ events | tojson }}</script>
+
+  <script>
+    const topicSlug = document.querySelector(".chat-shell").dataset.topicSlug;
+    const initialEvents = JSON.parse(document.getElementById("initial-events-json").textContent);
+    const messageStream = document.getElementById("messageStream");
+    const runStatus = document.getElementById("runStatus");
+    const orderChips = document.getElementById("orderChips");
+    const roundForm = document.getElementById("roundForm");
+    const userMessageInput = document.getElementById("userMessageInput");
+    const sendRoundButton = document.getElementById("sendRoundButton");
+    const defaultComposerPlaceholder = "直接输入你的观点。发送后，两个 AI 会按当前顺序自动连续回复。";
+
+    let agentOrder = Array.from(orderChips.querySelectorAll(".order-chip")).map((node) => node.dataset.agent);
+    let selectedAgentSet = new Set(agentOrder);
+    let pendingAgentBubble = null;
+    let autoContinuing = false;
+    let roundRunning = false;
+    let currentSpeaker = "{{ topic.state.current_speaker }}".trim();
+    let inlineProcessHost = null;
+    let pendingAgentState = null;
+    let preservedFailureBubble = null;
+
+    function escapeHtml(text) {
+      return String(text ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function renderInlineMarkdown(text) {
+      return escapeHtml(text)
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    }
+
+    function renderMarkdown(text) {
+      const source = String(text ?? "").replace(/\r\n/g, "\n").trim();
+      if (!source) return "";
+
+      const lines = source.split("\n");
+      const blocks = [];
+      let paragraph = [];
+      let listItems = [];
+      let inCode = false;
+      let codeLines = [];
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+        paragraph = [];
+      }
+
+      function flushList() {
+        if (!listItems.length) return;
+        blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+        listItems = [];
+      }
+
+      function flushCode() {
+        if (!inCode) return;
+        blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        inCode = false;
+        codeLines = [];
+      }
+
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
+        if (line.startsWith("```")) {
+          flushParagraph();
+          flushList();
+          if (inCode) {
+            flushCode();
+          } else {
+            inCode = true;
+          }
+          continue;
+        }
+        if (inCode) {
+          codeLines.push(rawLine);
+          continue;
+        }
+        if (!line.trim()) {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          const level = heading[1].length;
+          blocks.push(`<h${level + 2}>${renderInlineMarkdown(heading[2])}</h${level + 2}>`);
+          continue;
+        }
+        const listMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+\.\s+(.+)$/);
+        if (listMatch) {
+          flushParagraph();
+          listItems.push(listMatch[1]);
+          continue;
+        }
+        paragraph.push(line);
+      }
+
+      flushParagraph();
+      flushList();
+      flushCode();
+      return blocks.join("");
+    }
+
+    function processToggleLabel(isOpen) {
+      return isOpen ? "收起过程" : "查看过程";
+    }
+
+    function resizeComposer() {
+      if (!userMessageInput) return;
+      userMessageInput.style.height = "0px";
+      const nextHeight = Math.min(Math.max(userMessageInput.scrollHeight, 30), 120);
+      userMessageInput.style.height = `${nextHeight}px`;
+    }
+
+    function selectedAgents() {
+      return agentOrder.filter((agent) => selectedAgentSet.has(agent));
+    }
+
+    function renderMessage({ speaker, timestamp, content, pending = false, withProcess = false, markdown = !pending }) {
+      const row = document.createElement("article");
+      row.className = `message-row speaker-${speaker.toLowerCase()}${pending ? " is-pending" : ""}`;
+      row.innerHTML = `
+        <div class="avatar">${escapeHtml(speaker.slice(0, 1).toUpperCase())}</div>
+        <div class="message-bubble">
+          <div class="message-meta">
+            <strong>${escapeHtml(speaker)}</strong>
+            <span>${escapeHtml(timestamp || "处理中")}</span>
+          </div>
+          <div class="message-content">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
+          ${withProcess ? `
+          <details class="inline-process ${pending ? "is-live" : ""}" data-inline-process ${pending ? "open" : ""}>
+            <summary class="inline-process-title">${pending ? "生成过程" : processToggleLabel(false)}</summary>
+            <div class="inline-process-list"></div>
+          </details>
+          ` : ""}
+        </div>
+      `;
+      messageStream.appendChild(row);
+      const processNode = row.querySelector("[data-inline-process]");
+      if (processNode) {
+        const summaryNode = processNode.querySelector(".inline-process-title");
+        processNode.addEventListener("toggle", () => {
+          if (!summaryNode) return;
+          summaryNode.textContent = processNode.classList.contains("is-live")
+            ? "生成过程"
+            : processToggleLabel(processNode.open);
+        });
+      }
+      messageStream.scrollTop = messageStream.scrollHeight;
+      return row;
+    }
+
+    function rerenderMessages(messages) {
+      messageStream.innerHTML = "";
+      messages.forEach((message) =>
+        renderMessage({
+          speaker: message.speaker_id,
+          timestamp: message.created_at,
+          content: message.content,
+          markdown: true,
+        })
+      );
+    }
+
+    function shorten(text, max = 180) {
+      const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+      if (!normalized) return "";
+      return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
+    }
+
+    function extractShellIntent(command) {
+      const raw = String(command || "").trim();
+      if (!raw) return "";
+      const fileMatch = raw.match(/(?:sed -n '\d+,\d+p'|cat|rg(?: --files)?) ['"]?([^"' ]+\.[^"' ]+)['"]?/);
+      if (fileMatch) return `读取 ${fileMatch[1]}`;
+      if (raw.includes("state")) return "读取 topic 状态";
+      if (raw.includes("session")) return "读取会话状态";
+      if (raw.includes("messages")) return "读取消息记录";
+      if (raw.includes("rg ")) return `搜索：${shorten(raw, 90)}`;
+      return shorten(raw, 90);
+    }
+
+    function ensurePendingState(agent) {
+      if (!pendingAgentState || pendingAgentState.agent !== agent) {
+        pendingAgentState = {
+          agent,
+          textPreview: "",
+          stepKeys: new Set(),
+          packets: [],
+          processNodes: new Map(),
+        };
+      }
+      return pendingAgentState;
+    }
+
+    function deriveProcessKey(packet) {
+      if (packet.type !== "agent.event") {
+        return `${packet.type}:${packet.agent || "system"}`;
+      }
+
+      const event = packet.event || {};
+      if (packet.agent === "codex") {
+        const item = event.item || {};
+        if (item.type === "command_execution") return `codex:command:${item.command || "unknown"}`;
+        if (item.type === "reasoning") return "codex:reasoning";
+        if (item.type === "agent_message") return "codex:agent_message";
+        return `codex:event:${event.type || "unknown"}`;
+      }
+
+      if (packet.agent === "claudecode") {
+        const nested = event.event || {};
+        const delta = nested.delta || {};
+        if (event.type === "assistant") return "claudecode:assistant";
+        if (event.type === "stream_event" && nested.type === "content_block_delta" && delta.type === "text_delta") {
+          return "claudecode:text_delta";
+        }
+        if (event.type === "stream_event" && nested.type === "content_block_delta" && delta.type === "thinking_delta") {
+          return "claudecode:thinking_delta";
+        }
+        if (event.type === "stream_event") return `claudecode:stream:${nested.type || "unknown"}`;
+        return `claudecode:event:${event.type || "unknown"}`;
+      }
+
+      return `${packet.agent || "agent"}:${packet.event?.type || packet.type}`;
+    }
+
+    function summarizePacket(packet) {
+      if (packet.type === "round.started") return `新一轮开始，AI 顺序：${packet.agent_order.join(" -> ")}`;
+      if (packet.type === "user.message.accepted") return `用户消息已写入，下一位：${packet.next_speaker}`;
+      if (packet.type === "orchestrator.started") return `${packet.agent} 开始处理本轮发言`;
+      if (packet.type === "run.started") return `${packet.agent} 已启动本地 CLI`;
+      if (packet.type === "run.completed") return `${packet.agent} 已完成本轮生成`;
+      if (packet.type === "orchestrator.completed") return `${packet.agent} 发言已写入数据库消息流，下一位：${packet.next_speaker}`;
+      if (packet.type === "agent.event") {
+        const event = packet.event || {};
+        if (packet.agent === "codex") {
+          const item = event.item || {};
+          if (event.type === "thread.started") return "Codex 会话已连接";
+          if (event.type === "turn.started") return "Codex 开始当前轮回复";
+          if (event.type === "turn.completed") return "Codex 完成当前轮回复";
+          if (event.type === "error") return `Codex 运行报错：${shorten(event.message, 90)}`;
+          if (event.type === "turn.failed") return `Codex 本轮失败：${shorten(event.error?.message, 90)}`;
+          if (item.type === "command_execution") return `Codex 正在执行：${extractShellIntent(item.command)}`;
+          if (item.type === "reasoning") return "Codex 正在整理上下文并规划回复";
+          if (item.type === "agent_message") return `Codex 正在形成回复：${shorten(item.text, 72)}`;
+          return `Codex 事件：${event.type || "unknown"}`;
+        }
+        if (packet.agent === "claudecode") {
+          const eventType = event.type || "unknown";
+          if (eventType === "system") return "ClaudeCode 会话已初始化";
+          if (eventType === "assistant") return `ClaudeCode 已生成完整回复草稿：${shorten(extractClaudeText(event), 72)}`;
+          if (eventType === "result") return "ClaudeCode 已完成当前轮回复";
+          if (eventType === "error") return `ClaudeCode 运行报错：${shorten(event.message, 90)}`;
+          if (eventType === "stream_event") {
+            const nested = event.event || {};
+            if (nested.type === "message_start") return "ClaudeCode 开始生成消息";
+            if (nested.type === "message_stop") return "ClaudeCode 结束消息生成";
+            if (nested.type === "content_block_delta") {
+              const delta = nested.delta || {};
+              if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文";
+              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(delta.text, 72)}`;
+            }
+          }
+          return `ClaudeCode 事件：${eventType}`;
+        }
+      }
+      if (packet.type === "error") return `错误：${packet.message}`;
+      if (packet.type === "snapshot") return "页面状态已刷新";
+      return packet.type || "event";
+    }
+
+    function extractClaudeText(event) {
+      const message = event?.message || {};
+      const content = Array.isArray(message.content) ? message.content : [];
+      return content
+        .filter((item) => item?.type === "text")
+        .map((item) => item.text || "")
+        .join("")
+        .trim();
+    }
+
+    function packetDetail(packet) {
+      if (packet.type === "round.started") return "系统已接受你的顺序编排，准备开始这一轮自动回复。";
+      if (packet.type === "user.message.accepted") return `你的消息已写入数据库，接下来由 ${packet.next_speaker} 开始回复。`;
+      if (packet.type === "orchestrator.started") return `${packet.agent} 正在读取共享规则、未读消息和当前状态。`;
+      if (packet.type === "run.started") return `${packet.agent} 的本地运行已启动。`;
+      if (packet.type === "run.completed") return `${packet.agent} 已完成本轮生成，结果即将写入主对话。`;
+      if (packet.type === "orchestrator.completed") return `${packet.agent} 的回复已写入数据库消息流。`;
+      if (packet.type === "error") return packet.message || "运行出错";
+      if (packet.type === "snapshot") return "页面状态已经同步到最新。";
+      if (packet.type === "agent.event") {
+        const event = packet.event || {};
+        if (packet.agent === "codex") {
+          const item = event.item || {};
+          if (event.type === "thread.started") return "Codex 会话已建立。";
+          if (event.type === "turn.started") return "Codex 开始当前轮回复。";
+          if (event.type === "turn.completed") return "Codex 完成当前轮回复。";
+          if (event.type === "error") return `Codex 返回错误：${event.message || "未知错误"}`;
+          if (event.type === "turn.failed") return `Codex 本轮失败：${event.error?.message || "未知原因"}`;
+          if (item.type === "command_execution") {
+            const intent = extractShellIntent(item.command);
+            const output = shorten(item.aggregated_output, 160);
+            if (item.status === "completed" && output) return `${intent}。输出摘要：${output}`;
+            return `${intent}。命令：${shorten(item.command, 140)}`;
+          }
+          if (item.type === "reasoning") return "Codex 正在分析上下文、已有发言和当前轮状态。";
+          if (item.type === "agent_message") return `Codex 当前形成的文本片段：${shorten(item.text, 180)}`;
+        }
+        if (packet.agent === "claudecode") {
+          const eventType = event.type || "";
+          if (eventType === "system") return "ClaudeCode 会话已初始化。";
+          if (eventType === "assistant") return `ClaudeCode 当前完整草稿：${shorten(extractClaudeText(event), 180)}`;
+          if (eventType === "result") return "ClaudeCode 已完成当前轮回复。";
+          if (eventType === "error") return `ClaudeCode 返回错误：${event.message || "未知错误"}`;
+          if (eventType === "stream_event") {
+            const nested = event.event || {};
+            if (nested.type === "message_start") return "ClaudeCode 开始生成消息。";
+            if (nested.type === "message_stop") return "ClaudeCode 结束消息生成。";
+            if (nested.type === "content_block_delta") {
+              const delta = nested.delta || {};
+              if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文并组织表述。";
+              if (delta.type === "text_delta") return `ClaudeCode 新输出片段：${shorten(delta.text, 180)}`;
+            }
+          }
+        }
+      }
+      return "过程事件已记录。";
+    }
+
+    function buildProcessEntry(packet) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "inline-process-item";
+      wrapper.dataset.processKey = deriveProcessKey(packet);
+
+      const summary = document.createElement("div");
+      summary.className = "inline-process-summary";
+      summary.textContent = summarizePacket(packet);
+      wrapper.appendChild(summary);
+
+      const detail = packetDetail(packet);
+      if (detail) {
+        const detailNode = document.createElement("div");
+        detailNode.className = "process-detail";
+        detailNode.textContent = detail;
+        wrapper.appendChild(detailNode);
+      }
+
+      const raw = document.createElement("details");
+      raw.className = "process-raw-wrap";
+      raw.innerHTML = `
+        <summary>查看原始事件</summary>
+        <pre class="process-raw">${escapeHtml(JSON.stringify(packet, null, 2))}</pre>
+      `;
+      wrapper.appendChild(raw);
+      return wrapper;
+    }
+
+    function updateProcessEntry(node, packet) {
+      const summaryNode = node.querySelector(".inline-process-summary");
+      if (summaryNode) summaryNode.textContent = summarizePacket(packet);
+
+      const detailText = packetDetail(packet);
+      let detailNode = node.querySelector(".process-detail");
+      if (detailText) {
+        if (!detailNode) {
+          detailNode = document.createElement("div");
+          detailNode.className = "process-detail";
+          node.insertBefore(detailNode, node.querySelector(".process-raw-wrap"));
+        }
+        detailNode.textContent = detailText;
+      } else if (detailNode) {
+        detailNode.remove();
+      }
+
+      const rawNode = node.querySelector(".process-raw");
+      if (rawNode) rawNode.textContent = JSON.stringify(packet, null, 2);
+    }
+
+    function appendInlineProcess(packet) {
+      if (!inlineProcessHost) return;
+      const list = inlineProcessHost.querySelector(".inline-process-list");
+      if (!list) return;
+      const state = ensurePendingState(packet.agent || pendingAgentState?.agent || "");
+      const key = deriveProcessKey(packet);
+      state.packets.push(packet);
+      const existingNode = state.processNodes.get(key);
+      if (existingNode) {
+        updateProcessEntry(existingNode, packet);
+      } else {
+        const node = buildProcessEntry(packet);
+        state.processNodes.set(key, node);
+        state.stepKeys.add(key);
+        list.appendChild(node);
+      }
+      messageStream.scrollTop = messageStream.scrollHeight;
+    }
+
+    function captureFailureBubble() {
+      if (!pendingAgentBubble || !pendingAgentState) return;
+      const contentNode = pendingAgentBubble.querySelector(".message-content");
+      preservedFailureBubble = {
+        speaker: pendingAgentState.agent,
+        content: contentNode ? contentNode.textContent : `${pendingAgentState.agent} 运行失败`,
+        packets: [...pendingAgentState.packets],
+      };
+    }
+
+    function restoreFailureBubble() {
+      if (!preservedFailureBubble) return;
+      const row = renderMessage({
+        speaker: preservedFailureBubble.speaker,
+        timestamp: "失败",
+        content: preservedFailureBubble.content,
+        withProcess: true,
+        markdown: true,
+      });
+      const previousHost = inlineProcessHost;
+      const previousState = pendingAgentState;
+      inlineProcessHost = row.querySelector("[data-inline-process]");
+      pendingAgentState = {
+        agent: preservedFailureBubble.speaker,
+        textPreview: preservedFailureBubble.content,
+        stepKeys: new Set(),
+        packets: [],
+        processNodes: new Map(),
+      };
+      preservedFailureBubble.packets.forEach((packet) => appendInlineProcess(packet));
+      const processPanel = row.querySelector("[data-inline-process]");
+      if (processPanel) processPanel.open = false;
+      inlineProcessHost = previousHost;
+      pendingAgentState = previousState;
+    }
+
+    function finalizePendingBubble(packet) {
+      if (!pendingAgentBubble || !pendingAgentState) return;
+      const contentNode = pendingAgentBubble.querySelector(".message-content");
+      if (contentNode) contentNode.innerHTML = renderMarkdown(packet.message || pendingAgentState.textPreview || "");
+      const metaTime = pendingAgentBubble.querySelector(".message-meta span");
+      if (metaTime) metaTime.textContent = packet.turn_no ? `第 ${packet.turn_no} 轮` : "刚刚";
+      pendingAgentBubble.classList.remove("is-pending");
+      const processPanel = pendingAgentBubble.querySelector("[data-inline-process]");
+      if (processPanel) {
+        processPanel.classList.remove("is-live");
+        processPanel.open = false;
+        const summaryNode = processPanel.querySelector(".inline-process-title");
+        if (summaryNode) summaryNode.textContent = processToggleLabel(false);
+      }
+    }
+
+    function updatePendingBubble(packet) {
+      if (!pendingAgentBubble) return;
+      const contentNode = pendingAgentBubble.querySelector(".message-content");
+      if (!contentNode) return;
+      const state = ensurePendingState(packet.agent || pendingAgentState?.agent || "");
+      const event = packet.event || {};
+
+      if (packet.type === "orchestrator.started") {
+        contentNode.textContent = `${packet.agent} 正在读取完整上下文并准备回复…`;
+        return;
+      }
+
+      if (packet.agent === "codex") {
+        const item = event.item || {};
+        if (event.type === "error") {
+          contentNode.textContent = `Codex 运行失败：${event.message || "未知错误"}`;
+          return;
+        }
+        if (event.type === "turn.failed") {
+          contentNode.textContent = `Codex 本轮失败：${event.error?.message || "未知原因"}`;
+          return;
+        }
+        if (item.type === "agent_message" && item.text) {
+          state.textPreview = item.text.trim();
+          contentNode.textContent = state.textPreview;
+          return;
+        }
+        if (item.type === "command_execution") {
+          contentNode.textContent = `正在处理：${extractShellIntent(item.command)}`;
+          return;
+        }
+      }
+
+      if (packet.agent === "claudecode") {
+        if (event.type === "error") {
+          contentNode.textContent = `ClaudeCode 运行失败：${event.message || "未知错误"}`;
+          return;
+        }
+        if (event.type === "assistant") {
+          const text = extractClaudeText(event);
+          if (text) {
+            state.textPreview = text;
+            contentNode.textContent = state.textPreview;
+            return;
+          }
+        }
+        if (event.type === "stream_event") {
+          const nested = event.event || {};
+          if (nested.type === "content_block_delta") {
+            const delta = nested.delta || {};
+            if (delta.type === "text_delta" && delta.text) {
+              state.textPreview += delta.text;
+              contentNode.textContent = state.textPreview || "ClaudeCode 正在生成回复…";
+              return;
+            }
+            if (delta.type === "thinking_delta") {
+              contentNode.textContent = state.textPreview || "ClaudeCode 正在分析共享上下文并组织回复…";
+              return;
+            }
+          }
+        }
+      }
+
+      contentNode.textContent = summarizePacket(packet);
+    }
+
+    function renderSessions(sessions) {
+      return sessions;
+    }
+
+    function renderEvents(events) {
+      return events;
+    }
+
+    function applySnapshot(snapshot) {
+      rerenderMessages(snapshot.messages || []);
+      restoreFailureBubble();
+      renderSessions(snapshot.sessions);
+      renderEvents(snapshot.events);
+      currentSpeaker = snapshot.state.current_speaker;
+      const failedAgent = Object.entries(snapshot.sessions || {}).find(([, session]) => session?.status === "error")?.[0];
+      if (preservedFailureBubble || failedAgent) {
+        runStatus.textContent = `上一轮失败，当前停在 ${failedAgent || snapshot.state.current_speaker}。`;
+      } else {
+        runStatus.textContent = `当前发言者：${snapshot.state.current_speaker}`;
+      }
+      syncComposerControls();
+    }
+
+    function renderOrderChips() {
+      orderChips.innerHTML = "";
+      agentOrder.forEach((agent, index) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = `order-chip${selectedAgentSet.has(agent) ? " is-selected" : ""}`;
+        chip.dataset.agent = agent;
+        chip.disabled = roundRunning || autoContinuing;
+        chip.innerHTML = `<span class="order-index">${index + 1}</span><span>${escapeHtml(agent)}</span>`;
+        chip.addEventListener("click", () => {
+          if (roundRunning || autoContinuing) return;
+          const selected = selectedAgents();
+          if (selectedAgentSet.has(agent) && selected.length === 1) return;
+          if (selectedAgentSet.has(agent)) {
+            selectedAgentSet.delete(agent);
+          } else {
+            selectedAgentSet.add(agent);
+          }
+          syncOrderChipLabels();
+          renderOrderChips();
+        });
+        orderChips.appendChild(chip);
+      });
+      syncOrderChipLabels();
+    }
+
+    function syncOrderChipLabels() {
+      const selected = selectedAgents();
+      Array.from(orderChips.querySelectorAll(".order-chip")).forEach((chip) => {
+        const indexNode = chip.querySelector(".order-index");
+        if (!indexNode) return;
+        const agent = chip.dataset.agent;
+        chip.classList.toggle("is-selected", selectedAgentSet.has(agent));
+        indexNode.textContent = selectedAgentSet.has(agent)
+          ? String(selected.indexOf(agent) + 1)
+          : "·";
+      });
+    }
+
+    function syncComposerControls() {
+      const waitingForAgent = currentSpeaker !== "user";
+      const disabled = roundRunning || autoContinuing || waitingForAgent;
+      sendRoundButton.disabled = disabled;
+      userMessageInput.disabled = disabled;
+      userMessageInput.placeholder = waitingForAgent
+        ? `当前轮到 ${currentSpeaker} 发言。请等待自动回复完成后再继续输入。`
+        : defaultComposerPlaceholder;
+      resizeComposer();
+    }
+
+    function setRoundRunning(next) {
+      roundRunning = next;
+      syncComposerControls();
+      renderOrderChips();
+    }
+
+    async function runFullRound(content) {
+      const formData = new FormData();
+      formData.append("content", content);
+      formData.append("agent_order", selectedAgents().join(","));
+
+      const response = await fetch(`/api/topics/${topicSlug}/round-stream`, {
+        method: "POST",
+        body: formData,
+        headers: { "Accept": "application/x-ndjson" }
+      });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamHadError = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const packet = JSON.parse(line);
+
+          if (packet.type === "orchestrator.started") {
+            pendingAgentBubble = renderMessage({
+              speaker: packet.agent,
+              timestamp: "处理中",
+              content: `${packet.agent} 正在读取完整上下文并准备回复…`,
+              pending: true,
+              withProcess: true,
+            });
+            inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
+            pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+            appendInlineProcess(packet);
+          } else if (packet.type === "agent.event" && pendingAgentBubble) {
+            updatePendingBubble(packet);
+            appendInlineProcess(packet);
+          } else if (packet.type === "orchestrator.completed") {
+            appendInlineProcess(packet);
+            finalizePendingBubble(packet);
+            if (pendingAgentBubble) {
+              pendingAgentBubble = null;
+              inlineProcessHost = null;
+              pendingAgentState = null;
+            }
+          } else if (packet.type === "error") {
+            streamHadError = true;
+            appendInlineProcess(packet);
+            captureFailureBubble();
+            runStatus.textContent = `运行失败：${packet.message}`;
+          } else if (packet.type === "run.started" || packet.type === "run.completed" || packet.type === "round.started" || packet.type === "user.message.accepted") {
+            appendInlineProcess(packet);
+          } else if (packet.type === "snapshot") {
+            applySnapshot(packet);
+          }
+        }
+      }
+      if (!streamHadError) runStatus.textContent = "本轮已自动跑完全部 agent。";
+    }
+
+    async function continuePendingRound() {
+      const response = await fetch(`/api/topics/${topicSlug}/continue-stream`, {
+        method: "POST",
+        headers: { "Accept": "application/x-ndjson" }
+      });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamHadError = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const packet = JSON.parse(line);
+
+          if (packet.type === "orchestrator.started") {
+            pendingAgentBubble = renderMessage({
+              speaker: packet.agent,
+              timestamp: "处理中",
+              content: `${packet.agent} 正在继续上一次未完成的轮次…`,
+              pending: true,
+              withProcess: true,
+            });
+            inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
+            pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+            appendInlineProcess(packet);
+          } else if (packet.type === "agent.event" && pendingAgentBubble) {
+            updatePendingBubble(packet);
+            appendInlineProcess(packet);
+          } else if (packet.type === "orchestrator.completed") {
+            appendInlineProcess(packet);
+            finalizePendingBubble(packet);
+            pendingAgentBubble = null;
+            inlineProcessHost = null;
+            pendingAgentState = null;
+          } else if (packet.type === "error") {
+            streamHadError = true;
+            appendInlineProcess(packet);
+            captureFailureBubble();
+            runStatus.textContent = `继续失败：${packet.message}`;
+          } else if (packet.type === "run.started" || packet.type === "run.completed" || packet.type === "round.resume") {
+            appendInlineProcess(packet);
+          } else if (packet.type === "snapshot") {
+            applySnapshot(packet);
+          }
+        }
+      }
+      if (!streamHadError) runStatus.textContent = "已自动补完上一轮未完成的回复。";
+    }
+
+    roundForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (roundRunning || autoContinuing) return;
+      const content = userMessageInput.value.trim();
+      if (!content) return;
+
+      inlineProcessHost = null;
+      const chosenAgents = selectedAgents();
+      runStatus.textContent = `已发送，准备按 ${chosenAgents.join(" -> ")} 自动全回复`;
+      setRoundRunning(true);
+      renderMessage({ speaker: "user", timestamp: "刚刚", content });
+      userMessageInput.value = "";
+      resizeComposer();
+
+      try {
+        preservedFailureBubble = null;
+        await runFullRound(content);
+      } catch (error) {
+        runStatus.textContent = `运行失败：${error.message}`;
+      } finally {
+        setRoundRunning(false);
+      }
+    });
+
+    Array.from(document.querySelectorAll(".message-row .message-content")).forEach((node) => {
+      const row = node.closest(".message-row");
+      if (row?.classList.contains("is-pending")) return;
+      node.innerHTML = renderMarkdown(node.textContent || "");
+    });
+
+    userMessageInput.addEventListener("input", resizeComposer);
+    renderOrderChips();
+    syncComposerControls();
+    resizeComposer();
+    if ("{{ topic.state.current_speaker }}".trim() !== "user" && !autoContinuing) {
+      autoContinuing = true;
+      setRoundRunning(false);
+      runStatus.textContent = `检测到当前停在 {{ topic.state.current_speaker }}，正在自动继续剩余回复…`;
+      continuePendingRound()
+        .then(() => {})
+        .catch((error) => {
+          runStatus.textContent = `自动继续失败：${error.message}`;
+        })
+        .finally(() => {
+          autoContinuing = false;
+          syncComposerControls();
+          renderOrderChips();
+        });
+    }
+  </script>
+</body>
+</html>
