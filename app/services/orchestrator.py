@@ -358,6 +358,14 @@ def stream_full_round(slug: str, content: str, agent_order: list[str]) -> Iterat
             sync_topic_index(slug)
             _TOPIC_CANCEL_FLAGS.pop(slug, None)
             yield {"type": "round.cancelled", "message": "已取消"}
+        except Exception as exc:
+            logger.error("[%s] round failed: %s", slug, exc)
+            unregister_process(slug)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            yield {"type": "error", "message": str(exc)}
 
 
 def stream_continue_round(slug: str) -> Iterator[dict]:
@@ -388,3 +396,11 @@ def stream_continue_round(slug: str) -> Iterator[dict]:
             sync_topic_index(slug)
             _TOPIC_CANCEL_FLAGS.pop(slug, None)
             yield {"type": "round.cancelled", "message": "已取消"}
+        except Exception as exc:
+            logger.error("[%s] continue failed: %s", slug, exc)
+            unregister_process(slug)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            yield {"type": "error", "message": str(exc)}

@@ -1,4 +1,4 @@
-# Agent Deliberation System
+# Agent Deliberation System（百家争鸣）
 
 一个面向多方讨论的本地工作台。
 

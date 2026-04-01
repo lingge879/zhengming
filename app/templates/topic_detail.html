@@ -112,6 +112,7 @@
 
     let _userScrolledUp = false;
     let _scrollRafPending = false;
+    let _scrollEnabled = false;
 
     messageStream.addEventListener("scroll", function() {
       const gap = messageStream.scrollHeight - messageStream.scrollTop - messageStream.clientHeight;
@@ -119,13 +120,17 @@
     }, { passive: true });
 
     function scrollToBottomIfNeeded() {
-      if (_userScrolledUp || _scrollRafPending) return;
+      if (!_scrollEnabled || _userScrolledUp || _scrollRafPending) return;
       _scrollRafPending = true;
       requestAnimationFrame(function() {
         _scrollRafPending = false;
         messageStream.scrollTop = messageStream.scrollHeight;
       });
     }
+
+    // Initial scroll + enable auto-scroll after layout settles
+    messageStream.scrollTop = messageStream.scrollHeight;
+    setTimeout(function() { _scrollEnabled = true; }, 500);
 
     function escapeHtml(text) {
       return String(text ?? "")
@@ -957,10 +962,12 @@
       lastMessageScrollTop = currentTop;
     });
 
-    document.querySelector(".chat-stage").addEventListener("click", function(e) {
-      if (e.target.closest("a, button, textarea, details, .copy-btn, .inline-process, .composer-shell, .order-chips")) return;
-      setTopbarHidden(!topbarHidden);
-      lastMessageScrollTop = messageStream.scrollTop;
+    document.querySelector(".chat-stage").addEventListener("dblclick", function(e) {
+      if (e.target.closest("a, button, textarea, input, details, .copy-btn, .order-chips")) return;
+      if (topbarHidden) {
+        setTopbarHidden(false);
+        lastMessageScrollTop = messageStream.scrollTop;
+      }
     });
 
     userMessageInput.addEventListener("input", resizeComposer);
