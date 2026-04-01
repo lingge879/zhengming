@@ -110,6 +110,23 @@
     const DISPLAY_NAMES = { user: "User", codex: "Codex", claudecode: "ClaudeCode" };
     function displayName(id) { return DISPLAY_NAMES[id] || id; }
 
+    let _userScrolledUp = false;
+    let _scrollRafPending = false;
+
+    messageStream.addEventListener("scroll", function() {
+      const gap = messageStream.scrollHeight - messageStream.scrollTop - messageStream.clientHeight;
+      _userScrolledUp = gap > 80;
+    }, { passive: true });
+
+    function scrollToBottomIfNeeded() {
+      if (_userScrolledUp || _scrollRafPending) return;
+      _scrollRafPending = true;
+      requestAnimationFrame(function() {
+        _scrollRafPending = false;
+        messageStream.scrollTop = messageStream.scrollHeight;
+      });
+    }
+
     function escapeHtml(text) {
       return String(text ?? "")
         .replaceAll("&", "&amp;")
@@ -266,7 +283,7 @@
             : processToggleLabel(processNode.open);
         });
       }
-      messageStream.scrollTop = messageStream.scrollHeight;
+      scrollToBottomIfNeeded();
       return row;
     }
 
@@ -513,7 +530,7 @@
         state.stepKeys.add(key);
         list.appendChild(node);
       }
-      messageStream.scrollTop = messageStream.scrollHeight;
+      scrollToBottomIfNeeded();
     }
 
     function captureFailureBubble() {
@@ -877,6 +894,7 @@
       const chosenAgents = selectedAgents();
       runStatus.textContent = `已发送，准备按 ${chosenAgents.join(" -> ")} 自动全回复`;
       setRoundRunning(true);
+      _userScrolledUp = false;
       renderMessage({ speaker: "user", timestamp: "刚刚", content });
       userMessageInput.value = "";
       resizeComposer();

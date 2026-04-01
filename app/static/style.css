@@ -29,7 +29,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; min-height: 100%; }
+html, body { margin: 0; min-height: 100%; }
 
 body {
   font-family: "Noto Sans SC", "PingFang SC", "Helvetica Neue", sans-serif;
@@ -38,7 +38,7 @@ body {
   overflow: hidden;
 }
 
-body.home-body { overflow: auto; }
+body.home-body { overflow: auto; min-height: 100vh; }
 body.chat-body { overflow: hidden; }
 
 textarea, input, button { font: inherit; }
@@ -157,6 +157,11 @@ border-radius: 4px;
 /* ============================================
    首页 HOME
    ============================================ */
+html {
+  background: var(--paper);
+}
+
+html:has(body.home-body),
 body.home-body {
   background:
     /* 竹简纹理 —— 若隐若现的竖条纹 */
@@ -175,6 +180,7 @@ body.home-body {
     radial-gradient(ellipse at 15% 85%, rgba(28,28,28,0.06), transparent 40%),
     radial-gradient(ellipse at 85% 90%, rgba(59,129,140,0.04), transparent 35%),
     linear-gradient(180deg, #f5ead0 0%, #efe0c4 100%);
+  background-attachment: scroll;
 }
 
 .page {
