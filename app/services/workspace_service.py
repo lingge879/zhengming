@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import DEFAULT_DOCS_DIR, TOPICS_DIR
+from ..config import DEFAULT_DOCS_DIR, LEGACY_TOPICS_DIR, WORKSPACES_DIR
 from ..db import get_conn
 
 
@@ -36,11 +36,18 @@ def _workspace_path_from_db(slug: str) -> Path | None:
 
 
 def topic_path(slug: str) -> Path:
-    return _workspace_path_from_db(slug) or (TOPICS_DIR / slug)
+    db_path = _workspace_path_from_db(slug)
+    if db_path is not None:
+        return db_path
+    workspace_path = WORKSPACES_DIR / slug
+    if workspace_path.exists():
+        return workspace_path
+    return LEGACY_TOPICS_DIR / slug
 
 
 def ensure_topics_dir() -> None:
-    TOPICS_DIR.mkdir(parents=True, exist_ok=True)
+    WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+    LEGACY_TOPICS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def read_text(path: Path) -> str:
@@ -100,7 +107,6 @@ def workspace_files(slug: str) -> dict[str, Path]:
         "root": root,
         "agents": root / "AGENTS.md",
         "claude": root / "CLAUDE.md",
-        "events": root / "events.jsonl",
         "artifacts": root / "artifacts",
     }
 
@@ -138,10 +144,8 @@ def ensure_workspace_initialized(slug: str) -> Path:
     elif not read_text(files["claude"]).strip():
         write_text(files["claude"], default_claude_doc(root))
 
-    if not files["events"].exists():
-        write_text(files["events"], "")
-
     (root / "README.md").unlink(missing_ok=True)
+    (root / "events.jsonl").unlink(missing_ok=True)
     migrate_workspace_docs(slug)
     return root
 
@@ -149,25 +153,27 @@ def ensure_workspace_initialized(slug: str) -> Path:
 def _build_workspace_root() -> Path:
     ensure_topics_dir()
     base = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")[:-3]
-    candidate = TOPICS_DIR / base
+    candidate = WORKSPACES_DIR / base
     suffix = 1
     while candidate.exists():
         suffix += 1
-        candidate = TOPICS_DIR / f"{base}-{suffix:02d}"
+        candidate = WORKSPACES_DIR / f"{base}-{suffix:02d}"
     return candidate
 
 
 def create_topic_workspace(title: str, slug: str, description: str) -> Path:
     ensure_topics_dir()
-    legacy_root = TOPICS_DIR / slug
+    legacy_root = LEGACY_TOPICS_DIR / slug
     if legacy_root.exists():
         raise FileExistsError(f"topic 已存在: {slug}")
+    workspace_root = WORKSPACES_DIR / slug
+    if workspace_root.exists():
+        raise FileExistsError(f"workspace 已存在: {slug}")
     root = _build_workspace_root()
     files = {
         "root": root,
         "agents": root / "AGENTS.md",
         "claude": root / "CLAUDE.md",
-        "events": root / "events.jsonl",
         "artifacts": root / "artifacts",
     }
 
@@ -178,6 +184,5 @@ def create_topic_workspace(title: str, slug: str, description: str) -> Path:
 
     write_text(files["agents"], agent_md)
     write_text(files["claude"], claude_md)
-    write_text(files["events"], "")
 
     return root

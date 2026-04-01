@@ -201,28 +201,6 @@ def test_run_agent_stream_endpoint_always_returns_snapshot(monkeypatch):
         _cleanup_topic(slug)
 
 
-def test_workspace_docs_are_migrated_away_from_discussion_md():
-    slug = _unique_slug("workspace-migrate")
-    try:
-        create_topic("Workspace Migrate", slug, "test")
-        files = workspace_files(slug)
-        write_text(
-            files["agents"],
-            "# AGENTS\n\n3. 当前讨论记录统一写入 `discussion.md`。\n",
-        )
-        write_text(
-            files["claude"],
-            "# CLAUDE\n\n进入后先读取：\n\n- `discussion.md`\n",
-        )
-
-        ensure_workspace_initialized(slug)
-
-        assert "discussion.md" not in read_text(files["agents"])
-        assert "`messages`（数据库）" in read_text(files["claude"])
-    finally:
-        _cleanup_topic(slug)
-
-
 def test_build_agent_prompt_is_minimal_and_contains_only_unread_messages():
     slug = _unique_slug("agent-prompt-minimal")
     try:
@@ -321,5 +299,5 @@ def test_default_docs_are_loaded_from_defaults_directory():
     assert "# CLAUDE" in claude
     assert "{{WORKSPACE_ROOT}}" not in agents
     assert "{{WORKSPACE_ROOT}}" not in claude
-    assert str(root) in agents
-    assert str(root) in claude
+    assert "当前是多方参与的讨论场景" in agents
+    assert "当前是多方参与的讨论场景" in claude

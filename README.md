@@ -1,31 +1,34 @@
 # Agent Deliberation System
 
-一个工作空间驱动的统一讨论平台。
+一个面向多方讨论的本地工作台。
 
-## 目标
+## 现在的主设计
 
-- 一个会话对应一个独立工作空间
-- 你、Codex、ClaudeCode 围绕同一份上下文讨论
-- 页面负责推进发言顺序
-- 运行过程完整记录到 `events.jsonl`
-- 对话消息以数据库为准，不再依赖 `discussion.md`
+- 每个会话对应一个独立工作空间
+- 对话消息、topic 状态、agent session 状态全部以 SQLite 为准
+- 工作空间目录只保留共享上下文文件，例如 `AGENTS.md`、`CLAUDE.md`、`artifacts/`
+- agent 每次启动时都会显式指定当前工作空间目录
+- 每次喂给 agent 的消息，只包含它“还没有读过的新消息”
+- 运行原始事件统一写入系统日志，不再写 `discussion.md`、`sessions.json`、`config.json` 这类中间文件
 
-## 默认模板位置
+## 目录约定
 
-可直接修改这里的默认模板，后续新建 workspace 会使用它们：
+新会话工作空间默认创建在：
+
+- [workspaces](/Users/item_admin/workspace/project/agent-deliberation-system/workspaces)
+
+兼容历史遗留目录：
+
+- [topics](/Users/item_admin/workspace/project/agent-deliberation-system/topics)
+
+默认 agent 模板在：
 
 - [defaults/AGENTS.md](/Users/item_admin/workspace/project/agent-deliberation-system/defaults/AGENTS.md)
 - [defaults/CLAUDE.md](/Users/item_admin/workspace/project/agent-deliberation-system/defaults/CLAUDE.md)
 
-模板中的 `{{WORKSPACE_ROOT}}` 会在创建 topic 工作空间时自动替换成实际路径。
+系统日志默认写到：
 
-## 目录
-
-- [README.md](/Users/item_admin/workspace/project/agent-deliberation-system/README.md)
-- [DESIGN.md](/Users/item_admin/workspace/project/agent-deliberation-system/DESIGN.md)
-- [defaults](/Users/item_admin/workspace/project/agent-deliberation-system/defaults)
-- [topics](/Users/item_admin/workspace/project/agent-deliberation-system/topics)
-- [app/main.py](/Users/item_admin/workspace/project/agent-deliberation-system/app/main.py)
+- [data/system.log](/Users/item_admin/workspace/project/agent-deliberation-system/data/system.log)
 
 ## 运行
 
@@ -40,23 +43,12 @@ uvicorn run:app --host 127.0.0.1 --port 8765
 http://127.0.0.1:8765
 ```
 
-## 当前工作空间文件
+## 工作空间内容
 
-每个 topic 工作空间下会有：
+每个工作空间下默认只有这些共享文件：
 
 - `AGENTS.md`
 - `CLAUDE.md`
-- `events.jsonl`
 - `artifacts/`
 
-数据库负责：
-
-- 对话消息
-- topic 状态
-- agent session 状态
-
-## 说明
-
-- agent 启动时会显式指定工作目录
-- prompt 只传该 agent 尚未读过的新消息
-- `discussion.md`、`state.json`、`sessions.json`、`config.json` 已不再作为当前主设计
+这两个文档是默认人设和工作约束模板；你可以直接改模板，也可以改单个工作空间中的副本。

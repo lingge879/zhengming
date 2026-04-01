@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..config import DEFAULT_AGENT_LIST, DEFAULT_SPEAKER_ORDER, TOPICS_DIR
+from ..config import DEFAULT_AGENT_LIST, DEFAULT_SPEAKER_ORDER, LEGACY_TOPICS_DIR, WORKSPACES_DIR
 from ..db import get_conn
 from .agent_state_service import ensure_agent_states
 from .message_service import latest_message_id
@@ -125,7 +125,8 @@ def sync_topic_index(slug: str) -> None:
 
 
 def sync_all_topics() -> None:
-    TOPICS_DIR.mkdir(parents=True, exist_ok=True)
+    WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+    LEGACY_TOPICS_DIR.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         rows = conn.execute("SELECT slug, workspace_path FROM topics").fetchall()
 
@@ -146,15 +147,15 @@ def sync_all_topics() -> None:
             conn.execute("DELETE FROM messages WHERE topic_slug = ?", (slug,))
             conn.commit()
 
-    for child in TOPICS_DIR.iterdir():
-        if (
-            child.is_dir()
-            and child.name not in seen_legacy_slugs
-            and str(child.resolve()) not in known_workspace_paths
-        ):
-            legacy_root = TOPICS_DIR / child.name
-            if (legacy_root / "AGENTS.md").exists() or (legacy_root / "CLAUDE.md").exists():
-                sync_topic_index(child.name)
+    for base_dir in (WORKSPACES_DIR, LEGACY_TOPICS_DIR):
+        for child in base_dir.iterdir():
+            if (
+                child.is_dir()
+                and child.name not in seen_legacy_slugs
+                and str(child.resolve()) not in known_workspace_paths
+            ):
+                if (child / "AGENTS.md").exists() or (child / "CLAUDE.md").exists():
+                    sync_topic_index(child.name)
 
 
 def list_topics() -> list[dict]:

@@ -28,8 +28,8 @@ def index(request: Request):
 @router.get("/topics/{slug}", response_class=HTMLResponse)
 def topic_detail(request: Request, slug: str):
     topic = get_topic(slug)
-    events = read_events(slug, limit=500)
     messages = read_messages(slug)
+    events = read_events(slug)
     return templates.TemplateResponse(
         request,
         "topic_detail.html",

@@ -41,7 +41,6 @@ def post_user_message_json(slug: str, content: str = Form(...)):
         "state": load_state(slug),
         "sessions": load_sessions(slug),
         "messages": read_messages(slug),
-        "events": read_events(slug, limit=500),
     }
 
 
@@ -69,7 +68,7 @@ def run_agent_turn_stream(slug: str):
             "state": load_state(slug),
             "sessions": load_sessions(slug),
             "messages": read_messages(slug),
-            "events": read_events(slug, limit=500),
+            "events": read_events(slug),
         }
         yield json.dumps(snapshot, ensure_ascii=False) + "\n"
 
@@ -82,7 +81,7 @@ def topic_snapshot(slug: str):
         "state": load_state(slug),
         "sessions": load_sessions(slug),
         "messages": read_messages(slug),
-        "events": read_events(slug, limit=500),
+        "events": read_events(slug),
     }
 
 
@@ -104,7 +103,7 @@ def run_full_round_stream(
             "state": load_state(slug),
             "sessions": load_sessions(slug),
             "messages": read_messages(slug),
-            "events": read_events(slug, limit=500),
+            "events": read_events(slug),
         }
         yield json.dumps(snapshot, ensure_ascii=False) + "\n"
 
@@ -124,7 +123,7 @@ def continue_round_stream(slug: str):
             "state": load_state(slug),
             "sessions": load_sessions(slug),
             "messages": read_messages(slug),
-            "events": read_events(slug, limit=500),
+            "events": read_events(slug),
         }
         yield json.dumps(snapshot, ensure_ascii=False) + "\n"
 

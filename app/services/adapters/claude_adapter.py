@@ -51,8 +51,6 @@ def stream_claude(
         "-p",
         "--verbose",
         "--dangerously-skip-permissions",
-        "--tools",
-        "",
         "--output-format",
         "stream-json",
         "--include-partial-messages",

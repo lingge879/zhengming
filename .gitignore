@@ -5,6 +5,7 @@ __pycache__/
 
 data/
 topics/
+workspaces/
 
 .env
 .venv/

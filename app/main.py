@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import STATIC_DIR
 from .db import init_db
+from .logging_setup import setup_logging
 from .routers import api_topics, api_turns, pages
 from .services.topic_service import sync_all_topics
 
@@ -15,6 +16,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.on_event("startup")
 def on_startup() -> None:
+    setup_logging()
     init_db()
     sync_all_topics()
 
@@ -22,4 +24,3 @@ def on_startup() -> None:
 app.include_router(pages.router)
 app.include_router(api_topics.router)
 app.include_router(api_turns.router)
-
