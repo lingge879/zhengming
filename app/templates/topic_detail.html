@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css?v=chunqiu03" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: false, theme: "neutral" });</script>
 </head>
 <body class="chat-body">
   <main class="chat-shell" data-topic-slug="{{ topic.slug }}">
@@ -86,6 +88,7 @@
     const userMessageInput = document.getElementById("userMessageInput");
     const sendRoundButton = document.getElementById("sendRoundButton");
     const defaultComposerPlaceholder = "直抒己见，发送后诸子依序论之。";
+    let currentAbortController = null;
 
     let allAgents = Array.from(orderChips.querySelectorAll(".order-chip")).map((node) => node.dataset.agent);
     let agentOrder = allAgents.slice();
@@ -132,6 +135,8 @@
       let inCode = false;
       let codeLines = [];
 
+      let codeLang = "";
+
       function flushParagraph() {
         if (!paragraph.length) return;
         blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
@@ -146,9 +151,14 @@
 
       function flushCode() {
         if (!inCode) return;
-        blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        if (codeLang === "mermaid") {
+          blocks.push(`<pre class="mermaid">${escapeHtml(codeLines.join("\n"))}</pre>`);
+        } else {
+          blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        }
         inCode = false;
         codeLines = [];
+        codeLang = "";
       }
 
       for (const rawLine of lines) {
@@ -160,6 +170,7 @@
             flushCode();
           } else {
             inCode = true;
+            codeLang = line.slice(3).trim().toLowerCase();
           }
           continue;
         }
@@ -269,6 +280,7 @@
           markdown: true,
         })
       );
+      mermaid.run({ nodes: messageStream.querySelectorAll(".mermaid") }).catch(() => {});
     }
 
     function shorten(text, max = 180) {
@@ -554,6 +566,7 @@
         const summaryNode = processPanel.querySelector(".inline-process-title");
         if (summaryNode) summaryNode.textContent = processToggleLabel(false);
       }
+      mermaid.run({ nodes: pendingAgentBubble.querySelectorAll(".mermaid") }).catch(() => {});
     }
 
     function updatePendingBubble(packet) {
@@ -699,8 +712,29 @@
 
     function setRoundRunning(next) {
       roundRunning = next;
+      if (next) {
+        sendRoundButton.textContent = "取消";
+        sendRoundButton.classList.add("is-cancel");
+        sendRoundButton.disabled = false;
+      } else {
+        sendRoundButton.textContent = "发送";
+        sendRoundButton.classList.remove("is-cancel");
+        currentAbortController = null;
+      }
       syncComposerControls();
       renderOrderChips();
+    }
+
+    async function cancelRound() {
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+      try {
+        await fetch(`/api/topics/${topicSlug}/cancel`, { method: "POST" });
+      } catch (_) {}
+      runStatus.textContent = "已取消。";
+      setRoundRunning(false);
     }
 
     async function runFullRound(content) {
@@ -708,10 +742,12 @@
       formData.append("content", content);
       formData.append("agent_order", selectedAgents().join(","));
 
+      currentAbortController = new AbortController();
       const response = await fetch(`/api/topics/${topicSlug}/round-stream`, {
         method: "POST",
         body: formData,
-        headers: { "Accept": "application/x-ndjson" }
+        headers: { "Accept": "application/x-ndjson" },
+        signal: currentAbortController.signal,
       });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -769,9 +805,11 @@
     }
 
     async function continuePendingRound() {
+      currentAbortController = new AbortController();
       const response = await fetch(`/api/topics/${topicSlug}/continue-stream`, {
         method: "POST",
-        headers: { "Accept": "application/x-ndjson" }
+        headers: { "Accept": "application/x-ndjson" },
+        signal: currentAbortController.signal,
       });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -828,7 +866,10 @@
 
     roundForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (roundRunning || autoContinuing) return;
+      if (roundRunning || autoContinuing) {
+        cancelRound();
+        return;
+      }
       const content = userMessageInput.value.trim();
       if (!content) return;
 
@@ -844,7 +885,9 @@
         preservedFailureBubble = null;
         await runFullRound(content);
       } catch (error) {
-        runStatus.textContent = `运行失败：${error.message}`;
+        if (error.name !== "AbortError") {
+          runStatus.textContent = `运行失败：${error.message}`;
+        }
       } finally {
         setRoundRunning(false);
       }
@@ -855,6 +898,7 @@
       if (row?.classList.contains("is-pending")) return;
       node.innerHTML = renderMarkdown(node.textContent || "");
     });
+    mermaid.run({ nodes: document.querySelectorAll(".mermaid") }).catch(() => {});
 
     messageStream.addEventListener("click", async (event) => {
       const copyBtn = event.target.closest(".copy-btn");
@@ -895,9 +939,15 @@
       lastMessageScrollTop = currentTop;
     });
 
+    document.querySelector(".chat-stage").addEventListener("click", function(e) {
+      if (e.target.closest("a, button, textarea, details, .copy-btn, .inline-process, .composer-shell, .order-chips")) return;
+      setTopbarHidden(!topbarHidden);
+      lastMessageScrollTop = messageStream.scrollTop;
+    });
+
     userMessageInput.addEventListener("input", resizeComposer);
     userMessageInput.addEventListener("keydown", function(e) {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         roundForm.requestSubmit();
       }

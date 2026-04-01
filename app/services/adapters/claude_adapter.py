@@ -42,6 +42,7 @@ def stream_claude(
     workspace: Path,
     prompt: str,
     session_id: str | None,
+    on_process=None,
 ) -> Iterator[dict]:
     run_id = f"claude-{uuid.uuid4().hex[:12]}"
     final_text = ""
@@ -80,6 +81,8 @@ def stream_claude(
         cwd=workspace,
         bufsize=1,
     )
+    if on_process:
+        on_process(process)
 
     assert process.stdin is not None
     process.stdin.write(prompt)

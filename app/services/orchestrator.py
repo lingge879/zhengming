@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -11,6 +12,7 @@ from .adapters.codex_adapter import run_codex, stream_codex
 from .discussion_service import append_message
 from .message_service import list_messages_after, list_messages_between
 from .event_service import append_event
+from .prompt_delivery_service import create_prompt_delivery, update_prompt_delivery
 from .session_service import load_sessions, update_session
 from .state_service import advance_speaker, load_state, save_state, set_speaker_order
 from .topic_service import sync_topic_index
@@ -20,6 +22,12 @@ logger = logging.getLogger("agent_deliberation.orchestrator")
 
 
 _TOPIC_RUN_LOCKS: dict[str, Lock] = {}
+_TOPIC_CANCEL_FLAGS: dict[str, bool] = {}
+_TOPIC_PROCESSES: dict[str, subprocess.Popen] = {}
+
+
+class CancelledError(Exception):
+    pass
 
 
 def _get_topic_lock(slug: str) -> Lock:
@@ -28,6 +36,28 @@ def _get_topic_lock(slug: str) -> Lock:
         lock = Lock()
         _TOPIC_RUN_LOCKS[slug] = lock
     return lock
+
+
+def register_process(slug: str, process: subprocess.Popen) -> None:
+    _TOPIC_PROCESSES[slug] = process
+
+
+def unregister_process(slug: str) -> None:
+    _TOPIC_PROCESSES.pop(slug, None)
+
+
+def cancel_topic(slug: str) -> None:
+    logger.info("[%s] cancel requested", slug)
+    _TOPIC_CANCEL_FLAGS[slug] = True
+    proc = _TOPIC_PROCESSES.pop(slug, None)
+    if proc and proc.poll() is None:
+        logger.info("[%s] killing subprocess pid=%s", slug, proc.pid)
+        proc.kill()
+
+
+def _check_cancelled(slug: str) -> None:
+    if _TOPIC_CANCEL_FLAGS.get(slug):
+        raise CancelledError(f"topic {slug} cancelled")
 
 
 @contextmanager
@@ -62,11 +92,23 @@ def build_agent_prompt(slug: str, agent: str) -> tuple[str, list[dict], int | No
     last_delivered = session.get("last_delivered_message_id")
     has_pending_delivery = last_delivered is not None and (last_read is None or last_delivered > last_read)
     if has_pending_delivery:
-        unread_messages = list_messages_between(slug, last_read, last_delivered)
-        delivered_upto = last_delivered
+        pending_messages = list_messages_between(slug, last_read, last_delivered)
+        newer_messages = list_messages_after(slug, last_delivered)
+        unread_messages = pending_messages + newer_messages
+        delivered_upto = unread_messages[-1]["id"] if unread_messages else last_delivered
     else:
         unread_messages = list_messages_after(slug, last_read)
         delivered_upto = unread_messages[-1]["id"] if unread_messages else last_read
+    logger.info(
+        "[%s] prompt window agent=%s last_read=%s last_delivered=%s has_pending=%s unread_ids=%s delivered_upto=%s",
+        slug,
+        agent,
+        last_read,
+        last_delivered,
+        has_pending_delivery,
+        [message["id"] for message in unread_messages],
+        delivered_upto,
+    )
     prompt = f"""下面是你尚未读过的新消息。
 
 请基于这些新消息继续当前讨论，直接给出你这一轮要发送的内容。
@@ -85,10 +127,23 @@ def run_current_agent(slug: str) -> AgentRunResult:
 
     files = workspace_files(slug)
     sessions = load_sessions(slug)
-    session_id = sessions.get(agent, {}).get("session_id")
+    session = sessions.get(agent, {})
+    session_id = session.get("session_id")
     update_session(slug, agent, status="running")
 
-    prompt, _, delivered_upto = build_agent_prompt(slug, agent)
+    prompt, unread_messages, delivered_upto = build_agent_prompt(slug, agent)
+    delivery = create_prompt_delivery(
+        slug,
+        agent,
+        run_id=None,
+        session_id=session_id,
+        turn_no=state["turn_no"],
+        last_read_before=session.get("last_read_message_id"),
+        last_delivered_before=session.get("last_delivered_message_id"),
+        delivered_upto=delivered_upto,
+        message_ids=[message["id"] for message in unread_messages],
+        status="sent",
+    )
     update_session(slug, agent, last_delivered_message_id=delivered_upto, status="running")
     try:
         if agent == "codex":
@@ -96,6 +151,7 @@ def run_current_agent(slug: str) -> AgentRunResult:
         else:
             result = run_claude(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id)
     except Exception:
+        update_prompt_delivery(delivery["id"], status="failed")
         update_session(slug, agent, session_id=session_id, status="error")
         sync_topic_index(slug)
         raise
@@ -111,6 +167,14 @@ def run_current_agent(slug: str) -> AgentRunResult:
         last_read_message_id=appended["id"],
         last_delivered_message_id=appended["id"],
         status="active",
+    )
+    update_prompt_delivery(
+        delivery["id"],
+        run_id=result.run_id,
+        session_id=result.session_id,
+        status="completed",
+        delivered_upto=delivered_upto,
+        response_message_id=appended["id"],
     )
     append_event(
         slug,
@@ -140,7 +204,8 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
 
     files = workspace_files(slug)
     sessions = load_sessions(slug)
-    session_id = sessions.get(agent, {}).get("session_id")
+    session = sessions.get(agent, {})
+    session_id = session.get("session_id")
     update_session(slug, agent, status="running")
 
     yield {
@@ -152,23 +217,44 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
     }
     logger.info("[%s] orchestrator.started agent=%s turn=%s session=%s", slug, agent, state["turn_no"], session_id)
 
-    prompt, _, delivered_upto = build_agent_prompt(slug, agent)
+    prompt, unread_messages, delivered_upto = build_agent_prompt(slug, agent)
     logger.info("[%s] >>> PROMPT to %s:\n%s", slug, agent, prompt)
+    delivery = create_prompt_delivery(
+        slug,
+        agent,
+        run_id=None,
+        session_id=session_id,
+        turn_no=state["turn_no"],
+        last_read_before=session.get("last_read_message_id"),
+        last_delivered_before=session.get("last_delivered_message_id"),
+        delivered_upto=delivered_upto,
+        message_ids=[message["id"] for message in unread_messages],
+        status="sent",
+    )
     update_session(slug, agent, last_delivered_message_id=delivered_upto, status="running")
+    _on_proc = lambda proc: register_process(slug, proc)
     iterator = (
-        stream_codex(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id)
+        stream_codex(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id, on_process=_on_proc)
         if agent == "codex"
-        else stream_claude(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id)
+        else stream_claude(slug=slug, workspace=files["root"], prompt=prompt, session_id=session_id, on_process=_on_proc)
     )
 
     result: AgentRunResult | None = None
+    _TOPIC_CANCEL_FLAGS.pop(slug, None)  # clear any stale flag
     try:
         while True:
+            _check_cancelled(slug)
             packet = next(iterator)
             yield packet
     except StopIteration as stop:
         result = stop.value
+    except CancelledError:
+        update_prompt_delivery(delivery["id"], status="cancelled")
+        update_session(slug, agent, session_id=session_id, status="idle")
+        sync_topic_index(slug)
+        raise
     except Exception:
+        update_prompt_delivery(delivery["id"], status="failed")
         update_session(slug, agent, session_id=session_id, status="error")
         sync_topic_index(slug)
         raise
@@ -188,6 +274,14 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         last_read_message_id=appended["id"],
         last_delivered_message_id=appended["id"],
         status="active",
+    )
+    update_prompt_delivery(
+        delivery["id"],
+        run_id=result.run_id,
+        session_id=result.session_id,
+        status="completed",
+        delivered_upto=delivered_upto,
+        response_message_id=appended["id"],
     )
     append_event(
         slug,
@@ -252,9 +346,18 @@ def stream_full_round(slug: str, content: str, agent_order: list[str]) -> Iterat
             "content": content,
         }
 
-        while load_state(slug)["current_speaker"] != "user":
-            for packet in stream_current_agent(slug):
-                yield packet
+        try:
+            while load_state(slug)["current_speaker"] != "user":
+                for packet in stream_current_agent(slug):
+                    yield packet
+        except CancelledError:
+            logger.info("[%s] round cancelled", slug)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            _TOPIC_CANCEL_FLAGS.pop(slug, None)
+            yield {"type": "round.cancelled", "message": "已取消"}
 
 
 def stream_continue_round(slug: str) -> Iterator[dict]:
@@ -273,6 +376,15 @@ def stream_continue_round(slug: str) -> Iterator[dict]:
             "turn_no": state["turn_no"],
             "current_speaker": state["current_speaker"],
         }
-        while load_state(slug)["current_speaker"] != "user":
-            for packet in stream_current_agent(slug):
-                yield packet
+        try:
+            while load_state(slug)["current_speaker"] != "user":
+                for packet in stream_current_agent(slug):
+                    yield packet
+        except CancelledError:
+            logger.info("[%s] continue cancelled", slug)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            _TOPIC_CANCEL_FLAGS.pop(slug, None)
+            yield {"type": "round.cancelled", "message": "已取消"}

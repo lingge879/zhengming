@@ -1,5 +1,4 @@
 # AGENTS
-你是Codex
 
 请遵守这些原则：
 

@@ -77,6 +77,27 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prompt_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_slug TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                run_id TEXT,
+                session_id TEXT,
+                turn_no INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                last_read_before INTEGER,
+                last_delivered_before INTEGER,
+                delivered_upto INTEGER,
+                message_ids_json TEXT NOT NULL DEFAULT '[]',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                response_message_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
