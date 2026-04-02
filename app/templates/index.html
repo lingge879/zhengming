@@ -114,6 +114,30 @@
     });
 
     homeMessageInput.addEventListener("input", resizeHomeComposer);
+    homeMessageInput.addEventListener("paste", async function(e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (!items[i].type.startsWith("image/")) continue;
+        e.preventDefault();
+        var file = items[i].getAsFile();
+        if (!file) continue;
+        var fd = new FormData();
+        fd.append("file", file, file.name || "paste.png");
+        try {
+          var res = await fetch("/api/upload-temp", { method: "POST", body: fd });
+          var data = await res.json();
+          if (data.ok) {
+            var pos = homeMessageInput.selectionStart || 0;
+            var before = homeMessageInput.value.slice(0, pos);
+            var after = homeMessageInput.value.slice(pos);
+            homeMessageInput.value = before + data.markdown + "\n" + after;
+            resizeHomeComposer();
+          }
+        } catch (err) { console.error("upload failed", err); }
+        break;
+      }
+    });
     homeMessageInput.addEventListener("keydown", function(e) {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();

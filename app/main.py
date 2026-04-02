@@ -23,7 +23,9 @@ def on_startup() -> None:
 
 # Serve workspace artifacts (images etc.) at /artifacts/{slug}/{filename}
 from fastapi.responses import FileResponse
-from fastapi import HTTPException
+from fastapi import HTTPException, File, UploadFile
+import time as _time
+import uuid as _uuid
 
 @app.get("/artifacts/{slug}/{filename}")
 def serve_artifact(slug: str, filename: str):
@@ -31,6 +33,27 @@ def serve_artifact(slug: str, filename: str):
         path = base / slug / "artifacts" / filename
         if path.exists() and path.is_file():
             return FileResponse(path)
+    raise HTTPException(status_code=404, detail="not found")
+
+# Temp upload (no slug needed, for home page)
+TEMP_UPLOADS = WORKSPACES_DIR.parent / "data" / "tmp_uploads"
+
+@app.post("/api/upload-temp")
+async def upload_temp(file: UploadFile = File(...)):
+    TEMP_UPLOADS.mkdir(parents=True, exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
+    if ext not in ("png", "jpg", "jpeg", "gif", "webp", "svg"):
+        ext = "png"
+    name = f"{int(_time.time() * 1000)}-{_uuid.uuid4().hex[:6]}.{ext}"
+    dest = TEMP_UPLOADS / name
+    dest.write_bytes(await file.read())
+    return {"ok": True, "markdown": f"![{file.filename or name}](/tmp-uploads/{name})"}
+
+@app.get("/tmp-uploads/{filename}")
+def serve_temp_upload(filename: str):
+    path = TEMP_UPLOADS / filename
+    if path.exists() and path.is_file():
+        return FileResponse(path)
     raise HTTPException(status_code=404, detail="not found")
 
 

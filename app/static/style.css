@@ -533,6 +533,11 @@ body.chat-body {
   text-transform: uppercase;
   border: 2px solid currentColor;
   box-shadow: 1px 1px 0 rgba(26,16,8,0.12);
+  overflow: hidden;
+}
+.avatar img {
+  width: 22px; height: 22px;
+  object-fit: contain;
 }
 .speaker-user .avatar { color: var(--jade); background: rgba(59,129,140,0.08); border-color: var(--jade); }
 .speaker-codex .avatar { color: var(--ochre); background: rgba(160,82,45,0.08); border-color: var(--ochre); }
@@ -611,6 +616,29 @@ body.chat-body {
   border: 1px solid var(--line-light); overflow: auto;
 }
 .message-content pre code { padding: 0; border: 0; background: transparent; }
+
+/* 缩略图 + 灯箱 */
+.msg-thumb {
+  max-width: 180px; max-height: 120px;
+  border-radius: 4px;
+  border: 1px solid var(--line-light);
+  cursor: pointer;
+  margin: 4px 0;
+  transition: opacity 150ms;
+}
+.msg-thumb:hover { opacity: 0.8; }
+.lightbox-overlay {
+  position: fixed; inset: 0;
+  background: rgba(26, 16, 8, 0.7);
+  z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.lightbox-overlay img {
+  max-width: 90vw; max-height: 90vh;
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
 .message-content table {
   width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.92em;
 }

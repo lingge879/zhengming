@@ -29,7 +29,15 @@
             {% set name_map = {'user': 'User', 'codex': 'Codex', 'claudecode': 'ClaudeCode'} %}
             {% for message in messages %}
             <article class="message-row speaker-{{ message.speaker_id|lower }}" data-speaker="{{ message.speaker_id }}">
-              <div class="avatar">{{ name_map.get(message.speaker_id, message.speaker_id)[:1] }}</div>
+              <div class="avatar avatar-{{ message.speaker_id }}">
+                {% if message.speaker_id == 'codex' %}
+                <img src="/static/icons/openai.svg" width="20" height="20" />
+                {% elif message.speaker_id == 'claudecode' %}
+                <img src="/static/icons/claude.png" width="20" height="20" />
+                {% else %}
+                <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" fill="currentColor"/></svg>
+                {% endif %}
+              </div>
               <div class="message-bubble">
                 <div class="message-meta">
                   <strong>{{ name_map.get(message.speaker_id, message.speaker_id) }}</strong>
@@ -120,6 +128,15 @@
     const DISPLAY_NAMES = { user: "User", codex: "Codex", claudecode: "ClaudeCode" };
     function displayName(id) { return DISPLAY_NAMES[id] || id; }
 
+    const AVATAR_ICONS = {
+      codex: '<img src="/static/icons/openai.svg" width="20" height="20" />',
+      claudecode: '<img src="/static/icons/claude.png" width="20" height="20" />',
+      user: '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" fill="currentColor"/></svg>',
+    };
+    function avatarHTML(speaker) {
+      return AVATAR_ICONS[speaker] || escapeHtml(displayName(speaker).slice(0, 1));
+    }
+
     let _userScrolledUp = false;
     let _scrollRafPending = false;
     let _scrollEnabled = false;
@@ -149,7 +166,7 @@
     function mmGetScale() {
       var sh = messageStream.scrollHeight || 1;
       var mh = mmEl.clientHeight || 400;
-      return mh / sh;
+      return Math.min(mh / sh, 0.12);
     }
 
     function mmUpdateVP() {
@@ -207,6 +224,14 @@
     messageStream.addEventListener("scroll", mmUpdateVP, { passive: true });
     setTimeout(mmRebuild, 800);
 
+    function openLightbox(src) {
+      var overlay = document.createElement("div");
+      overlay.className = "lightbox-overlay";
+      overlay.innerHTML = '<img src="' + src + '" />';
+      overlay.addEventListener("click", function() { overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
     function escapeHtml(text) {
       return String(text ?? "")
         .replaceAll("&", "&amp;")
@@ -228,7 +253,7 @@
       var images = [];
       var withPlaceholders = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function(_, alt, src) {
         var idx = images.length;
-        images.push('<img src="' + convertImagePath(src) + '" alt="' + alt + '" style="max-width:100%;border-radius:4px;margin:4px 0;" />');
+        images.push('<img src="' + convertImagePath(src) + '" alt="' + alt + '" class="msg-thumb" onclick="openLightbox(this.src)" />');
         return "%%IMG" + idx + "%%";
       });
       var result = escapeHtml(withPlaceholders)
@@ -386,7 +411,7 @@
       row.className = `message-row speaker-${speaker.toLowerCase()}${pending ? " is-pending" : ""}`;
       row.dataset.speaker = speaker;
       row.innerHTML = `
-        <div class="avatar">${escapeHtml(displayName(speaker).slice(0, 1))}</div>
+        <div class="avatar">${avatarHTML(speaker)}</div>
         <div class="message-bubble">
           <div class="message-meta">
             <strong>${escapeHtml(displayName(speaker))}</strong>
@@ -874,13 +899,26 @@
 
     function syncComposerControls() {
       const waitingForAgent = currentSpeaker !== "user";
-      const sendButtonDisabled = nudgeRunning || (!roundRunning && !autoContinuing && waitingForAgent);
-      const inputDisabled = roundRunning || autoContinuing || waitingForAgent || nudgeRunning;
-      sendRoundButton.disabled = sendButtonDisabled;
-      userMessageInput.disabled = inputDisabled;
-      userMessageInput.placeholder = waitingForAgent
-        ? `当前轮到 ${currentSpeaker} 发言。请等待自动回复完成后再继续输入。`
-        : defaultComposerPlaceholder;
+      const isBusy = roundRunning || autoContinuing || nudgeRunning;
+      const canCancel = isBusy;
+
+      // Send button: show "止言" when busy, "出言" when idle
+      if (canCancel) {
+        sendRoundButton.textContent = "止言";
+        sendRoundButton.classList.add("is-cancel");
+        sendRoundButton.disabled = false;
+      } else {
+        sendRoundButton.textContent = "出言";
+        sendRoundButton.classList.remove("is-cancel");
+        sendRoundButton.disabled = waitingForAgent;
+      }
+
+      userMessageInput.disabled = isBusy || waitingForAgent;
+      userMessageInput.placeholder = isBusy
+        ? "正在等待 AI 回复…"
+        : waitingForAgent
+          ? `当前轮到 ${displayName(currentSpeaker)} 发言。请等待自动回复完成后再继续输入。`
+          : defaultComposerPlaceholder;
       resizeComposer();
       syncNudgeButtons();
     }
@@ -912,6 +950,9 @@
         btn.classList.toggle("is-disabled", Boolean(reason));
         btn.setAttribute("aria-disabled", reason ? "true" : "false");
         btn.title = reason || (isCancelButton ? `为 ${displayName(agent)} 止言` : `请 ${displayName(agent)} 出言`);
+        btn.innerHTML = isCancelButton
+          ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>'
+          : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
         // Replace node to clear old listeners
         var clone = btn.cloneNode(true);
         clone.disabled = false;
@@ -933,13 +974,7 @@
 
     function setRoundRunning(next) {
       roundRunning = next;
-      if (next) {
-        sendRoundButton.textContent = "止言";
-        sendRoundButton.classList.add("is-cancel");
-        sendRoundButton.disabled = false;
-      } else {
-        sendRoundButton.textContent = "出言";
-        sendRoundButton.classList.remove("is-cancel");
+      if (!next) {
         currentAbortController = null;
       }
       syncComposerControls();
@@ -954,6 +989,24 @@
       try {
         await fetch(`/api/topics/${topicSlug}/cancel`, { method: "POST" });
       } catch (_) {}
+      nudgeRunning = false;
+      activeNudgeAgent = null;
+      pendingAgentBubble = null;
+      inlineProcessHost = null;
+      pendingAgentState = null;
+      runStatus.textContent = "正在止言…";
+      // Poll until current_speaker is back to user
+      for (var i = 0; i < 20; i++) {
+        await new Promise(function(r) { setTimeout(r, 500); });
+        try {
+          var snap = await fetch(`/api/topics/${topicSlug}/snapshot`).then(function(r) { return r.json(); });
+          if (snap.state && snap.state.current_speaker === "user") {
+            rerenderMessages(snap.messages || []);
+            currentSpeaker = "user";
+            break;
+          }
+        } catch (_) {}
+      }
       runStatus.textContent = "已止言。";
       setRoundRunning(false);
     }
@@ -1237,9 +1290,16 @@
 
     messageStream.addEventListener("scroll", () => {
       const currentTop = messageStream.scrollTop;
+      const delta = currentTop - lastMessageScrollTop;
 
       if (_scrollHideEnabled) {
-        setTopbarHidden(true);
+        if (currentTop <= 24) {
+          setTopbarHidden(false);
+        } else if (delta > 12) {
+          setTopbarHidden(true);
+        } else if (delta < -12) {
+          setTopbarHidden(false);
+        }
       }
 
       lastMessageScrollTop = currentTop;
