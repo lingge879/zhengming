@@ -723,9 +723,10 @@
 
     function syncComposerControls() {
       const waitingForAgent = currentSpeaker !== "user";
-      const disabled = roundRunning || autoContinuing || waitingForAgent;
-      sendRoundButton.disabled = disabled;
-      userMessageInput.disabled = disabled;
+      const sendButtonDisabled = !roundRunning && !autoContinuing && waitingForAgent;
+      const inputDisabled = roundRunning || autoContinuing || waitingForAgent;
+      sendRoundButton.disabled = sendButtonDisabled;
+      userMessageInput.disabled = inputDisabled;
       userMessageInput.placeholder = waitingForAgent
         ? `当前轮到 ${currentSpeaker} 发言。请等待自动回复完成后再继续输入。`
         : defaultComposerPlaceholder;
