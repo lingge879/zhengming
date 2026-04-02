@@ -89,7 +89,35 @@ def stream_claude(
     process.stdin.close()
 
     assert process.stdout is not None
-    for line in process.stdout:
+    import select
+    while True:
+        # If process exited, drain remaining stdout and break
+        if process.poll() is not None:
+            for line in process.stdout:
+                raw = line.rstrip("\n")
+                if not raw.strip():
+                    continue
+                event_count += 1
+                try:
+                    event = json.loads(raw)
+                    current_session_id = _extract_session_id(event) or current_session_id
+                    extracted = _extract_claude_message(event)
+                    if event.get("type") == "assistant" and extracted:
+                        assistant_text = extracted
+                    elif extracted:
+                        final_text = extracted
+                    append_event(slug, {"topic_slug": slug, "run_id": run_id, "agent": "claudecode", "turn_no": None, "source": "claude_cli", "ts": now_iso(), "event": event})
+                    yield {"type": "agent.event", "agent": "claudecode", "run_id": run_id, "session_id": current_session_id, "event_index": event_count, "event": event}
+                except json.JSONDecodeError:
+                    pass
+            break
+        # Process alive — wait up to 5s for data, then loop back to check poll()
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        if not ready:
+            continue  # No data yet, but process still alive — keep waiting
+        line = process.stdout.readline()
+        if not line:
+            break
         raw = line.rstrip("\n")
         if not raw.strip():
             continue

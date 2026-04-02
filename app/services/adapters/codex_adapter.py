@@ -86,7 +86,29 @@ def stream_codex(
     process.stdin.close()
 
     assert process.stdout is not None
-    for line in process.stdout:
+    import select
+    while True:
+        if process.poll() is not None:
+            for line in process.stdout:
+                raw = line.rstrip("\n")
+                if not raw.strip():
+                    continue
+                event_count += 1
+                try:
+                    event = json.loads(raw)
+                    thread_id = _extract_thread_id(event) or thread_id
+                    final_text = _extract_agent_text(event) or final_text
+                    append_event(slug, {"topic_slug": slug, "run_id": run_id, "agent": "codex", "turn_no": None, "source": "codex_cli", "ts": now_iso(), "event": event})
+                    yield {"type": "agent.event", "agent": "codex", "run_id": run_id, "session_id": thread_id, "event_index": event_count, "event": event}
+                except json.JSONDecodeError:
+                    pass
+            break
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        if not ready:
+            continue
+        line = process.stdout.readline()
+        if not line:
+            break
         raw = line.rstrip("\n")
         if not raw.strip():
             continue

@@ -1290,17 +1290,33 @@
     if ("{{ topic.state.current_speaker }}".trim() !== "user" && !autoContinuing) {
       autoContinuing = true;
       setRoundRunning(false);
-      runStatus.textContent = `检测到当前停在 {{ topic.state.current_speaker }}，正在自动继续剩余回复…`;
-      continuePendingRound()
-        .then(() => {})
-        .catch((error) => {
-          runStatus.textContent = `自动继续失败：${error.message}`;
-        })
-        .finally(() => {
-          autoContinuing = false;
-          syncComposerControls();
-          renderOrderChips();
-        });
+      runStatus.textContent = `检测到当前停在 {{ topic.state.current_speaker }}，等待后台任务完成…`;
+
+      (async function waitAndContinue() {
+        var maxRetries = 60; // 3s * 60 = 3 minutes max
+        for (var i = 0; i < maxRetries; i++) {
+          try {
+            await continuePendingRound();
+            break;
+          } catch (err) {
+            if (err.name === "AbortError") break;
+            // Check if speaker already back to user (backend finished while we waited)
+            try {
+              var snap = await fetch("/api/topics/" + topicSlug + "/snapshot").then(function(r) { return r.json(); });
+              if (snap.state && snap.state.current_speaker === "user") {
+                rerenderMessages(snap.messages || []);
+                runStatus.textContent = "后台任务已完成。";
+                break;
+              }
+            } catch (_) {}
+            runStatus.textContent = `后台任务进行中，等待重试… (${i + 1})`;
+            await new Promise(function(r) { setTimeout(r, 3000); });
+          }
+        }
+        autoContinuing = false;
+        syncComposerControls();
+        renderOrderChips();
+      })();
     }
   </script>
 </body>
