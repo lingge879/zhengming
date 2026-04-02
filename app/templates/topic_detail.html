@@ -24,6 +24,7 @@
 
       <section class="conversation-layout">
         <section class="message-panel panel-surface panel-surface-full">
+          <div class="message-stream-wrap">
           <div class="message-stream" id="messageStream">
             {% set name_map = {'user': 'User', 'codex': 'Codex', 'claudecode': 'ClaudeCode'} %}
             {% for message in messages %}
@@ -48,6 +49,11 @@
             </article>
             {% endfor %}
           </div>
+          <div id="minimap">
+            <div id="minimap-inner"></div>
+            <div class="minimap-vp" id="minimapVP"></div>
+          </div>
+          </div>
 
           <section class="composer-shell composer-shell-full">
             <div class="composer-toolbar composer-toolbar-full">
@@ -71,7 +77,6 @@
           </section>
         </section>
       </section>
-    </section>
   </main>
 
   <script id="initial-events-json" type="application/json">{{ events | tojson }}</script>
@@ -82,6 +87,9 @@
     const topbar = document.querySelector(".chat-topbar");
     const initialEvents = JSON.parse(document.getElementById("initial-events-json").textContent);
     const messageStream = document.getElementById("messageStream");
+    const mmEl = document.getElementById("minimap");
+    const mmInner = document.getElementById("minimap-inner");
+    const mmVP = document.getElementById("minimapVP");
     const runStatus = document.getElementById("runStatus");
     const orderChips = document.getElementById("orderChips");
     const roundForm = document.getElementById("roundForm");
@@ -133,6 +141,71 @@
     // Initial scroll + enable auto-scroll after layout settles
     messageStream.scrollTop = messageStream.scrollHeight;
     setTimeout(function() { _scrollEnabled = true; }, 500);
+
+    // ── Minimap ──
+    var _mmBusy = false;
+    var _mmDebounce = null;
+
+    function mmGetScale() {
+      var sh = messageStream.scrollHeight || 1;
+      var mh = mmEl.clientHeight || 400;
+      return mh / sh;
+    }
+
+    function mmUpdateVP() {
+      var sh = messageStream.scrollHeight;
+      var ch = messageStream.clientHeight;
+      var scale = mmGetScale();
+      var scaledH = sh * scale;
+      if (sh <= ch || scaledH <= 0) { mmVP.style.display = "none"; return; }
+      mmVP.style.display = "";
+      var vpH = Math.max(8, (ch / sh) * scaledH);
+      var top = (messageStream.scrollTop / sh) * scaledH;
+      mmVP.style.top = top + "px";
+      mmVP.style.height = vpH + "px";
+    }
+
+    function mmRebuild() {
+      if (_mmBusy) return;
+      _mmBusy = true;
+      requestAnimationFrame(function() {
+        var sw = messageStream.scrollWidth || messageStream.clientWidth || 1;
+        var sh = messageStream.scrollHeight || 1;
+        var scale = mmGetScale();
+        mmInner.innerHTML = messageStream.innerHTML;
+        mmInner.querySelectorAll("button, textarea, details, .copy-btn, .inline-process").forEach(function(el) { el.remove(); });
+        mmInner.style.width = sw + "px";
+        mmInner.style.height = sh + "px";
+        mmInner.style.transform = "scale(" + scale + ")";
+        mmUpdateVP();
+        _mmBusy = false;
+      });
+    }
+
+    function mmDebouncedRebuild() {
+      clearTimeout(_mmDebounce);
+      _mmDebounce = setTimeout(mmRebuild, 800);
+    }
+
+    function mmJump(y) {
+      var scale = mmGetScale();
+      var scaledH = messageStream.scrollHeight * scale;
+      if (scaledH <= 0) return;
+      var ratio = Math.max(0, Math.min(1, y / scaledH));
+      messageStream.scrollTop = ratio * (messageStream.scrollHeight - messageStream.clientHeight);
+    }
+
+    mmEl.addEventListener("mousedown", function(e) {
+      e.preventDefault();
+      mmJump(e.offsetY);
+      var drag = function(ev) { var r = mmEl.getBoundingClientRect(); mmJump(ev.clientY - r.top); };
+      var up = function() { document.removeEventListener("mousemove", drag); document.removeEventListener("mouseup", up); };
+      document.addEventListener("mousemove", drag);
+      document.addEventListener("mouseup", up);
+    });
+
+    messageStream.addEventListener("scroll", mmUpdateVP, { passive: true });
+    setTimeout(mmRebuild, 800);
 
     function escapeHtml(text) {
       return String(text ?? "")
@@ -294,6 +367,7 @@
       if (topbarHidden === hidden) return;
       topbarHidden = hidden;
       chatShell.classList.toggle("topbar-hidden", hidden);
+      setTimeout(mmRebuild, 300);
     }
 
     function resizeComposer() {
@@ -362,6 +436,7 @@
         })
       );
       mermaid.run({ nodes: messageStream.querySelectorAll(".mermaid") }).catch(() => {});
+      mmDebouncedRebuild();
     }
 
     function shorten(text, max = 180) {
@@ -648,6 +723,7 @@
         if (summaryNode) summaryNode.textContent = processToggleLabel(false);
       }
       mermaid.run({ nodes: pendingAgentBubble.querySelectorAll(".mermaid") }).catch(() => {});
+      mmDebouncedRebuild();
     }
 
     function updatePendingBubble(packet) {
