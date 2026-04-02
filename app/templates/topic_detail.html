@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=chunqiu03" />
+  <link rel="stylesheet" href="/static/style.css?v=chunqiu05" />
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script>mermaid.initialize({ startOnLoad: false, theme: "neutral" });</script>
 </head>
@@ -27,7 +27,7 @@
           <div class="message-stream" id="messageStream">
             {% set name_map = {'user': 'User', 'codex': 'Codex', 'claudecode': 'ClaudeCode'} %}
             {% for message in messages %}
-            <article class="message-row speaker-{{ message.speaker_id|lower }}">
+            <article class="message-row speaker-{{ message.speaker_id|lower }}" data-speaker="{{ message.speaker_id }}">
               <div class="avatar">{{ name_map.get(message.speaker_id, message.speaker_id)[:1] }}</div>
               <div class="message-bubble">
                 <div class="message-meta">
@@ -63,9 +63,9 @@
             </div>
 
             <form class="composer-form" id="roundForm">
-              <textarea name="content" id="userMessageInput" rows="1" placeholder="直抒己见，发送后诸子依序论之。"></textarea>
+              <textarea name="content" id="userMessageInput" rows="1" placeholder="直抒己见，出言后诸子依序论之。"></textarea>
               <div class="composer-actions composer-actions-end">
-                <button type="submit" class="primary-button" id="sendRoundButton">发送</button>
+                <button type="submit" class="primary-button" id="sendRoundButton">出言</button>
               </div>
             </form>
           </section>
@@ -87,7 +87,7 @@
     const roundForm = document.getElementById("roundForm");
     const userMessageInput = document.getElementById("userMessageInput");
     const sendRoundButton = document.getElementById("sendRoundButton");
-    const defaultComposerPlaceholder = "直抒己见，发送后诸子依序论之。";
+    const defaultComposerPlaceholder = "直抒己见，出言后诸子依序论之。";
     let currentAbortController = null;
 
     let allAgents = Array.from(orderChips.querySelectorAll(".order-chip")).map((node) => node.dataset.agent);
@@ -100,12 +100,14 @@
     let pendingAgentBubble = null;
     let autoContinuing = false;
     let roundRunning = false;
+    let activeNudgeAgent = null;
     let currentSpeaker = "{{ topic.state.current_speaker }}".trim();
     let inlineProcessHost = null;
     let pendingAgentState = null;
     let preservedFailureBubble = null;
     let lastMessageScrollTop = 0;
     let topbarHidden = false;
+    let nudgeRunning = false;
 
     const DISPLAY_NAMES = { user: "User", codex: "Codex", claudecode: "ClaudeCode" };
     function displayName(id) { return DISPLAY_NAMES[id] || id; }
@@ -139,11 +141,32 @@
         .replaceAll(">", "&gt;");
     }
 
+    function convertImagePath(src) {
+      // Convert absolute workspace path to web URL
+      var match = src.match(/\/workspaces\/([^/]+)\/artifacts\/(.+)$/);
+      if (match) return "/artifacts/" + match[1] + "/" + match[2];
+      match = src.match(/\/topics\/([^/]+)\/artifacts\/(.+)$/);
+      if (match) return "/artifacts/" + match[1] + "/" + match[2];
+      return src;
+    }
+
     function renderInlineMarkdown(text) {
-      return escapeHtml(text)
+      // Extract images BEFORE escaping HTML
+      var images = [];
+      var withPlaceholders = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function(_, alt, src) {
+        var idx = images.length;
+        images.push('<img src="' + convertImagePath(src) + '" alt="' + alt + '" style="max-width:100%;border-radius:4px;margin:4px 0;" />');
+        return "%%IMG" + idx + "%%";
+      });
+      var result = escapeHtml(withPlaceholders)
         .replace(/`([^`]+)`/g, "<code>$1</code>")
         .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
         .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+      // Restore images
+      for (var i = 0; i < images.length; i++) {
+        result = result.replace("%%IMG" + i + "%%", images[i]);
+      }
+      return result;
     }
 
     function renderMarkdown(text) {
@@ -158,6 +181,7 @@
       let codeLines = [];
 
       let codeLang = "";
+      let tableRows = [];
 
       function flushParagraph() {
         if (!paragraph.length) return;
@@ -169,6 +193,20 @@
         if (!listItems.length) return;
         blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
         listItems = [];
+      }
+
+      function flushTable() {
+        if (!tableRows.length) return;
+        const headerCells = tableRows[0];
+        let html = '<table><thead><tr>' +
+          headerCells.map(c => `<th>${renderInlineMarkdown(c)}</th>`).join('') +
+          '</tr></thead><tbody>';
+        for (let i = 2; i < tableRows.length; i++) {
+          html += '<tr>' + tableRows[i].map(c => `<td>${renderInlineMarkdown(c)}</td>`).join('') + '</tr>';
+        }
+        html += '</tbody></table>';
+        blocks.push(html);
+        tableRows = [];
       }
 
       function flushCode() {
@@ -188,6 +226,7 @@
         if (line.startsWith("```")) {
           flushParagraph();
           flushList();
+          flushTable();
           if (inCode) {
             flushCode();
           } else {
@@ -203,8 +242,26 @@
         if (!line.trim()) {
           flushParagraph();
           flushList();
+          flushTable();
           continue;
         }
+        /* ---- table row detection ---- */
+        if (line.includes("|")) {
+          const cells = line.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+          const isSeparator = cells.every(c => /^:?-+:?$/.test(c));
+          if (isSeparator && tableRows.length === 1) {
+            tableRows.push(cells);
+            continue;
+          }
+          if (tableRows.length >= 1 || (!isSeparator && cells.length >= 2)) {
+            flushParagraph();
+            flushList();
+            tableRows.push(cells);
+            continue;
+          }
+        }
+        if (tableRows.length) { flushTable(); }
+        /* ---- end table ---- */
         const heading = line.match(/^(#{1,3})\s+(.+)$/);
         if (heading) {
           flushParagraph();
@@ -224,6 +281,7 @@
 
       flushParagraph();
       flushList();
+      flushTable();
       flushCode();
       return blocks.join("");
     }
@@ -252,6 +310,7 @@
     function renderMessage({ speaker, timestamp, content, pending = false, withProcess = false, markdown = !pending }) {
       const row = document.createElement("article");
       row.className = `message-row speaker-${speaker.toLowerCase()}${pending ? " is-pending" : ""}`;
+      row.dataset.speaker = speaker;
       row.innerHTML = `
         <div class="avatar">${escapeHtml(displayName(speaker).slice(0, 1))}</div>
         <div class="message-bubble">
@@ -683,17 +742,22 @@
 
     function renderOrderChips() {
       orderChips.innerHTML = "";
+      const busy = roundRunning || autoContinuing || nudgeRunning;
       allAgents.forEach((agent) => {
         const isSelected = selectedAgentSet.has(agent);
         const selIdx = selectionOrder.indexOf(agent);
+
+        const wrapper = document.createElement("span");
+        wrapper.className = "chip-group";
+
         const chip = document.createElement("button");
         chip.type = "button";
         chip.className = `order-chip${isSelected ? " is-selected" : ""}`;
         chip.dataset.agent = agent;
-        chip.disabled = roundRunning || autoContinuing;
+        chip.disabled = busy;
         chip.innerHTML = `<span class="order-index">${isSelected ? selIdx + 1 : "·"}</span><span>${escapeHtml(agent)}</span>`;
         chip.addEventListener("click", () => {
-          if (roundRunning || autoContinuing) return;
+          if (busy) return;
           if (isSelected) {
             if (selectedAgents().length === 1) return;
             selectedAgentSet.delete(agent);
@@ -704,8 +768,19 @@
           }
           renderOrderChips();
         });
-        orderChips.appendChild(chip);
+        wrapper.appendChild(chip);
+
+        const nudge = document.createElement("button");
+        nudge.type = "button";
+        nudge.className = "nudge-chip-btn";
+        nudge.dataset.agent = agent;
+        nudge.textContent = "出言";
+        nudge.title = `请 ${displayName(agent)} 出言`;
+        wrapper.appendChild(nudge);
+
+        orderChips.appendChild(wrapper);
       });
+      syncNudgeButtons();
     }
 
     function syncOrderChipLabels() {
@@ -723,24 +798,71 @@
 
     function syncComposerControls() {
       const waitingForAgent = currentSpeaker !== "user";
-      const sendButtonDisabled = !roundRunning && !autoContinuing && waitingForAgent;
-      const inputDisabled = roundRunning || autoContinuing || waitingForAgent;
+      const sendButtonDisabled = nudgeRunning || (!roundRunning && !autoContinuing && waitingForAgent);
+      const inputDisabled = roundRunning || autoContinuing || waitingForAgent || nudgeRunning;
       sendRoundButton.disabled = sendButtonDisabled;
       userMessageInput.disabled = inputDisabled;
       userMessageInput.placeholder = waitingForAgent
         ? `当前轮到 ${currentSpeaker} 发言。请等待自动回复完成后再继续输入。`
         : defaultComposerPlaceholder;
       resizeComposer();
+      syncNudgeButtons();
+    }
+
+    function getLastSpeakerId() {
+      const rows = messageStream.querySelectorAll(".message-row[data-speaker]");
+      if (!rows.length) return null;
+      return rows[rows.length - 1].dataset.speaker;
+    }
+
+    function syncNudgeButtons() {
+      const lastSpeaker = getLastSpeakerId();
+      const busy = roundRunning || autoContinuing || nudgeRunning;
+      orderChips.querySelectorAll(".nudge-chip-btn").forEach(function(btn) {
+        var agent = btn.dataset.agent;
+        var reason = "";
+        var isCancelButton = nudgeRunning && activeNudgeAgent === agent;
+        if (busy && !isCancelButton) {
+          reason = autoContinuing
+            ? "系统正在自动续跑上一轮回复，请稍后再试"
+            : (roundRunning || nudgeRunning)
+              ? "当前已有回复链路在运行，请等待完成后再试"
+              : "";
+        } else if (agent === lastSpeaker) {
+          reason = displayName(agent) + " 刚刚已经发过言，当前不支持连续催同一个 agent";
+        }
+        btn.disabled = false;
+        btn.classList.toggle("is-cancel", isCancelButton);
+        btn.classList.toggle("is-disabled", Boolean(reason));
+        btn.setAttribute("aria-disabled", reason ? "true" : "false");
+        btn.title = reason || (isCancelButton ? `为 ${displayName(agent)} 止言` : `请 ${displayName(agent)} 出言`);
+        // Replace node to clear old listeners
+        var clone = btn.cloneNode(true);
+        clone.disabled = false;
+        clone.classList.toggle("is-cancel", isCancelButton);
+        clone.onclick = function() {
+          if (reason) {
+            runStatus.textContent = reason;
+            return;
+          }
+          if (isCancelButton) {
+            cancelRound();
+            return;
+          }
+          nudgeAgent(agent);
+        };
+        btn.replaceWith(clone);
+      });
     }
 
     function setRoundRunning(next) {
       roundRunning = next;
       if (next) {
-        sendRoundButton.textContent = "取消";
+        sendRoundButton.textContent = "止言";
         sendRoundButton.classList.add("is-cancel");
         sendRoundButton.disabled = false;
       } else {
-        sendRoundButton.textContent = "发送";
+        sendRoundButton.textContent = "出言";
         sendRoundButton.classList.remove("is-cancel");
         currentAbortController = null;
       }
@@ -756,7 +878,7 @@
       try {
         await fetch(`/api/topics/${topicSlug}/cancel`, { method: "POST" });
       } catch (_) {}
-      runStatus.textContent = "已取消。";
+      runStatus.textContent = "已止言。";
       setRoundRunning(false);
     }
 
@@ -887,6 +1009,92 @@
       if (!streamHadError) runStatus.textContent = "已自动补完上一轮未完成的回复。";
     }
 
+    async function nudgeAgent(agent) {
+      if (nudgeRunning || roundRunning || autoContinuing) return;
+      nudgeRunning = true;
+      activeNudgeAgent = agent;
+      _userScrolledUp = false;
+      syncComposerControls();
+      runStatus.textContent = `正在让 ${displayName(agent)} 继续发言…`;
+
+      const formData = new FormData();
+      formData.append("agent", agent);
+
+      currentAbortController = new AbortController();
+      let streamHadError = false;
+      try {
+        const response = await fetch(`/api/topics/${topicSlug}/nudge-stream`, {
+          method: "POST",
+          body: formData,
+          headers: { "Accept": "application/x-ndjson" },
+          signal: currentAbortController.signal,
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `HTTP ${response.status}`);
+        }
+        if (!response.body) throw new Error("No response body");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const packet = JSON.parse(line);
+
+            if (packet.type === "orchestrator.started") {
+              pendingAgentBubble = renderMessage({
+                speaker: packet.agent,
+                timestamp: "处理中",
+                content: `${displayName(packet.agent)} 正在继续发言…`,
+                pending: true,
+                withProcess: true,
+              });
+              inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
+              pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+              appendInlineProcess(packet);
+            } else if (packet.type === "agent.event" && pendingAgentBubble) {
+              updatePendingBubble(packet);
+              appendInlineProcess(packet);
+            } else if (packet.type === "orchestrator.completed") {
+              appendInlineProcess(packet);
+              finalizePendingBubble(packet);
+              pendingAgentBubble = null;
+              inlineProcessHost = null;
+              pendingAgentState = null;
+            } else if (packet.type === "error") {
+              streamHadError = true;
+              appendInlineProcess(packet);
+              captureFailureBubble();
+              runStatus.textContent = `继续发言失败：${packet.message}`;
+            } else if (packet.type === "nudge.started" || packet.type === "run.started" || packet.type === "run.completed") {
+              appendInlineProcess(packet);
+            } else if (packet.type === "snapshot") {
+              applySnapshot(packet);
+            }
+          }
+        }
+        if (!streamHadError) runStatus.textContent = `${displayName(agent)} 已完成继续发言。`;
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          runStatus.textContent = `继续发言失败：${error.message}`;
+        }
+      } finally {
+        nudgeRunning = false;
+        activeNudgeAgent = null;
+        currentAbortController = null;
+        syncComposerControls();
+      }
+    }
+
     roundForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (roundRunning || autoContinuing) {
@@ -898,7 +1106,7 @@
 
       inlineProcessHost = null;
       const chosenAgents = selectedAgents();
-      runStatus.textContent = `已发送，准备按 ${chosenAgents.join(" -> ")} 自动全回复`;
+      runStatus.textContent = `已出言，准备按 ${chosenAgents.join(" -> ")} 自动全回复`;
       setRoundRunning(true);
       _userScrolledUp = false;
       renderMessage({ speaker: "user", timestamp: "刚刚", content });
@@ -948,13 +1156,16 @@
       }
     });
 
+    let _scrollHideEnabled = false;
+    setTimeout(function() { _scrollHideEnabled = true; }, 1000);
+
     messageStream.addEventListener("scroll", () => {
       const currentTop = messageStream.scrollTop;
       const delta = currentTop - lastMessageScrollTop;
 
       if (currentTop <= 24) {
         setTopbarHidden(false);
-      } else if (delta > 12) {
+      } else if (_scrollHideEnabled && delta > 12) {
         setTopbarHidden(true);
       } else if (delta < -12) {
         setTopbarHidden(false);
@@ -972,6 +1183,30 @@
     });
 
     userMessageInput.addEventListener("input", resizeComposer);
+    userMessageInput.addEventListener("paste", async function(e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (!items[i].type.startsWith("image/")) continue;
+        e.preventDefault();
+        var file = items[i].getAsFile();
+        if (!file) continue;
+        var fd = new FormData();
+        fd.append("file", file, file.name || "paste.png");
+        try {
+          var res = await fetch("/api/topics/" + topicSlug + "/upload-image", { method: "POST", body: fd });
+          var data = await res.json();
+          if (data.ok) {
+            var pos = userMessageInput.selectionStart || 0;
+            var before = userMessageInput.value.slice(0, pos);
+            var after = userMessageInput.value.slice(pos);
+            userMessageInput.value = before + data.markdown + "\n" + after;
+            resizeComposer();
+          }
+        } catch (err) { console.error("upload failed", err); }
+        break;
+      }
+    });
     userMessageInput.addEventListener("keydown", function(e) {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();

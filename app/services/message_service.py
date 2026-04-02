@@ -91,3 +91,12 @@ def latest_message_id(slug: str) -> int | None:
             (slug,),
         ).fetchone()
     return row["max_id"] if row and row["max_id"] is not None else None
+
+
+def last_speaker_id(slug: str) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT speaker_id FROM messages WHERE topic_slug = ? ORDER BY id DESC LIMIT 1",
+            (slug,),
+        ).fetchone()
+    return row["speaker_id"] if row else None

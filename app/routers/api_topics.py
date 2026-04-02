@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Form, HTTPException
+import time
+import uuid
+
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 
 from ..services.orchestrator import handle_user_message
@@ -97,3 +100,30 @@ def delete_topic_action(slug: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@router.post("/{slug}/upload-image")
+async def upload_image(slug: str, file: UploadFile = File(...)):
+    ensure_workspace_initialized(slug)
+    files = workspace_files(slug)
+    if not files["root"].exists():
+        raise HTTPException(status_code=404, detail="topic 不存在")
+
+    artifacts = files["artifacts"]
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
+    if ext not in ("png", "jpg", "jpeg", "gif", "webp", "svg"):
+        ext = "png"
+    name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}.{ext}"
+    dest = artifacts / name
+
+    content = await file.read()
+    dest.write_bytes(content)
+
+    return {
+        "ok": True,
+        "filename": name,
+        "path": str(dest),
+        "markdown": f"![{file.filename or name}](/artifacts/{slug}/{name})",
+    }

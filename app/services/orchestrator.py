@@ -10,7 +10,7 @@ from ..schemas import AgentRunResult
 from .adapters.claude_adapter import run_claude, stream_claude
 from .adapters.codex_adapter import run_codex, stream_codex
 from .discussion_service import append_message
-from .message_service import list_messages_after, list_messages_between
+from .message_service import last_speaker_id, list_messages_after, list_messages_between
 from .event_service import append_event
 from .prompt_delivery_service import create_prompt_delivery, update_prompt_delivery
 from .session_service import load_sessions, update_session
@@ -404,3 +404,55 @@ def stream_continue_round(slug: str) -> Iterator[dict]:
             save_state(slug, state)
             sync_topic_index(slug)
             yield {"type": "error", "message": str(exc)}
+
+
+def stream_nudge_agent(slug: str, agent: str) -> Iterator[dict]:
+    """Let a specific agent speak without a new user message.
+
+    The target agent must NOT be the last speaker in the discussion.
+    After the agent finishes, current_speaker is reset to 'user'.
+    """
+    if agent not in {"codex", "claudecode"}:
+        raise ValueError(f"无效的 agent: {agent}")
+
+    last_speaker = last_speaker_id(slug)
+    if last_speaker == agent:
+        raise ValueError(f"{agent} 是最后一个发言者，不能连续指定同一个 agent 继续发言")
+
+    with topic_run_guard(slug):
+        # Temporarily set current_speaker so stream_current_agent picks it up
+        state = load_state(slug)
+        state["current_speaker"] = agent
+        save_state(slug, state)
+        sync_topic_index(slug)
+
+        yield {"type": "nudge.started", "agent": agent}
+
+        try:
+            for packet in stream_current_agent(slug):
+                yield packet
+        except CancelledError:
+            logger.info("[%s] nudge cancelled for %s", slug, agent)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            _TOPIC_CANCEL_FLAGS.pop(slug, None)
+            yield {"type": "round.cancelled", "message": "已取消"}
+            return
+        except Exception as exc:
+            logger.error("[%s] nudge failed for %s: %s", slug, agent, exc)
+            unregister_process(slug)
+            state = load_state(slug)
+            state["current_speaker"] = "user"
+            save_state(slug, state)
+            sync_topic_index(slug)
+            yield {"type": "error", "message": str(exc)}
+            return
+
+        # Reset to user after nudge (stream_current_agent called advance_speaker,
+        # which may have moved to the wrong next speaker)
+        state = load_state(slug)
+        state["current_speaker"] = "user"
+        save_state(slug, state)
+        sync_topic_index(slug)

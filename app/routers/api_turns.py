@@ -16,6 +16,7 @@ from ..services.orchestrator import (
     stream_continue_round,
     stream_current_agent,
     stream_full_round,
+    stream_nudge_agent,
 )
 from ..services.prompt_delivery_service import list_prompt_deliveries
 from ..services.session_service import load_sessions
@@ -158,6 +159,15 @@ def cancel_round(slug: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True}
+
+@router.post("/nudge-stream")
+def nudge_agent_stream(slug: str, agent: str = Form(...)):
+    try:
+        gen = stream_nudge_agent(slug, agent.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StreamingResponse(_run_generator_in_background(gen, slug), media_type="application/x-ndjson")
+
 
 @router.post("/continue-stream")
 def continue_round_stream(slug: str):
