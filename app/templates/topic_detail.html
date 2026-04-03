@@ -1292,14 +1292,8 @@
       const currentTop = messageStream.scrollTop;
       const delta = currentTop - lastMessageScrollTop;
 
-      if (_scrollHideEnabled) {
-        if (currentTop <= 24) {
-          setTopbarHidden(false);
-        } else if (delta > 12) {
-          setTopbarHidden(true);
-        } else if (delta < -12) {
-          setTopbarHidden(false);
-        }
+      if (_scrollHideEnabled && Math.abs(delta) > 12) {
+        setTopbarHidden(true);
       }
 
       lastMessageScrollTop = currentTop;
