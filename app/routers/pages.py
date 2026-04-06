@@ -7,6 +7,8 @@ from fastapi.templating import Jinja2Templates
 from ..config import TEMPLATES_DIR
 from ..services.discussion_service import read_messages
 from ..services.event_service import read_events
+from ..services.orchestrator import reconcile_orphaned_run
+from ..services.session_service import load_sessions
 from ..services.topic_service import get_topic, list_topics
 
 
@@ -27,6 +29,7 @@ def index(request: Request):
 
 @router.get("/topics/{slug}", response_class=HTMLResponse)
 def topic_detail(request: Request, slug: str):
+    reconcile_orphaned_run(slug)
     topic = get_topic(slug)
     messages = read_messages(slug)
     events = read_events(slug)
@@ -37,6 +40,7 @@ def topic_detail(request: Request, slug: str):
             "topic": topic,
             "messages": messages,
             "events": events,
+            "sessions": load_sessions(slug),
             "topic_slug": slug,
         },
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from datetime import datetime, timedelta
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -24,6 +25,7 @@ logger = logging.getLogger("agent_deliberation.orchestrator")
 _TOPIC_RUN_LOCKS: dict[str, Lock] = {}
 _TOPIC_CANCEL_FLAGS: dict[str, bool] = {}
 _TOPIC_PROCESSES: dict[str, subprocess.Popen] = {}
+_ORPHANED_RUN_GRACE_SECONDS = 15
 
 
 class CancelledError(Exception):
@@ -44,6 +46,50 @@ def register_process(slug: str, process: subprocess.Popen) -> None:
 
 def unregister_process(slug: str) -> None:
     _TOPIC_PROCESSES.pop(slug, None)
+
+
+def reconcile_orphaned_run(slug: str) -> bool:
+    state = load_state(slug)
+    if state["current_speaker"] == "user":
+        return False
+
+    sessions = load_sessions(slug)
+    agent = state["current_speaker"]
+    session = sessions.get(agent, {})
+    if session.get("status") != "running":
+        return False
+
+    proc = _TOPIC_PROCESSES.get(slug)
+    if proc is not None and proc.poll() is None:
+        return False
+    if proc is not None and proc.poll() is not None:
+        unregister_process(slug)
+
+    last_used_at = session.get("last_used_at")
+    if not last_used_at:
+        return False
+    try:
+        last_seen = datetime.fromisoformat(last_used_at)
+    except ValueError:
+        return False
+    if datetime.now(last_seen.tzinfo) - last_seen < timedelta(seconds=_ORPHANED_RUN_GRACE_SECONDS):
+        return False
+
+    logger.warning("[%s] recovering orphaned run for agent=%s", slug, agent)
+    update_session(slug, agent, status="error")
+    state["current_speaker"] = "user"
+    save_state(slug, state)
+    append_event(
+        slug,
+        {
+            "type": "error",
+            "agent": agent,
+            "message": "检测到已失联的后台任务，已自动回收运行状态",
+            "ts": now_iso(),
+        },
+    )
+    sync_topic_index(slug)
+    return True
 
 
 def cancel_topic(slug: str) -> None:

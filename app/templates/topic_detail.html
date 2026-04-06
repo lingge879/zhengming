@@ -87,13 +87,14 @@
       </section>
   </main>
 
-  <script id="initial-events-json" type="application/json">{{ events | tojson }}</script>
+  <script id="initial-snapshot-json" type="application/json">{{ {"state": topic.state, "messages": messages, "events": events, "sessions": sessions} | tojson }}</script>
 
   <script>
     const chatShell = document.querySelector(".chat-shell");
     const topicSlug = chatShell.dataset.topicSlug;
     const topbar = document.querySelector(".chat-topbar");
-    const initialEvents = JSON.parse(document.getElementById("initial-events-json").textContent);
+    const initialSnapshot = JSON.parse(document.getElementById("initial-snapshot-json").textContent);
+    const initialEvents = initialSnapshot.events || [];
     const messageStream = document.getElementById("messageStream");
     const mmEl = document.getElementById("minimap");
     const mmInner = document.getElementById("minimap-inner");
@@ -117,7 +118,7 @@
     let autoContinuing = false;
     let roundRunning = false;
     let activeNudgeAgent = null;
-    let currentSpeaker = "{{ topic.state.current_speaker }}".trim();
+    let currentSpeaker = String(initialSnapshot.state?.current_speaker || "").trim() || "{{ topic.state.current_speaker }}".trim();
     let inlineProcessHost = null;
     let pendingAgentState = null;
     let preservedFailureBubble = null;
@@ -471,11 +472,20 @@
       return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
     }
 
+    function summarizePath(rawPath) {
+      const value = String(rawPath || "").trim();
+      if (!value) return "";
+      const parts = value.split("/").filter(Boolean);
+      if (!parts.length) return value;
+      const tail = parts.slice(-2).join("/");
+      return tail || parts[parts.length - 1];
+    }
+
     function extractShellIntent(command) {
       const raw = String(command || "").trim();
       if (!raw) return "";
       const fileMatch = raw.match(/(?:sed -n '\d+,\d+p'|cat|rg(?: --files)?) ['"]?([^"' ]+\.[^"' ]+)['"]?/);
-      if (fileMatch) return `读取 ${fileMatch[1]}`;
+      if (fileMatch) return `读取 ${summarizePath(fileMatch[1])}`;
       if (raw.includes("state")) return "读取 topic 状态";
       if (raw.includes("session")) return "读取会话状态";
       if (raw.includes("messages")) return "读取消息记录";
@@ -578,6 +588,8 @@
       if (!parsed) return null;
 
       const lines = [];
+      if (parsed.file_path) lines.push(`file_path: ${String(parsed.file_path).trim()}`);
+      if (parsed.path && !parsed.file_path) lines.push(`path: ${String(parsed.path).trim()}`);
       if (parsed.prompt) lines.push(summarizePrompt(parsed.prompt));
       if (parsed.query && !parsed.prompt) lines.push(`查询：${shortenLine(parsed.query, 52)}`);
       if (parsed.url) lines.push(summarizeUrl(parsed.url));
@@ -600,7 +612,7 @@
         }
       }
 
-      return lines.filter(Boolean).slice(0, 2).join("\n");
+      return lines.filter(Boolean).slice(0, 2).join(" · ");
     }
 
     function formatToolResult(rawValue) {
@@ -676,8 +688,12 @@
         fragments.push(makeFragment(packet, {
           stage: "command",
           importance: "high",
-          primaryText: "执行命令",
-          secondaryText: extractShellIntent(item.command) || "",
+          primaryText: extractShellIntent(item.command) || "执行命令",
+          secondaryText: item.status === "completed"
+            ? "已完成"
+            : item.status === "in_progress"
+              ? "执行中"
+              : item.status || "",
           extraText: item.aggregated_output ? `输出：${shortenLine(item.aggregated_output, 72)}` : "",
           displayMode: "outcome",
           mergeKey: item.id ? `codex:command:${item.id}` : null,
@@ -799,7 +815,7 @@
               stage: "tool",
               importance: "high",
               primaryText: `调用工具 ${nested.content_block.name || ""}`.trim(),
-              secondaryText: "准备参数",
+              secondaryText: "",
               mergeKey: `claude:tool:${packet.run_id || "run"}:${nested.index}`,
               mergeStrategy: "replace",
             }));
@@ -827,7 +843,7 @@
             fragments.push(makeFragment(packet, {
               stage: "tool",
               importance: "high",
-              primaryText: "调用工具",
+              primaryText: "",
               extraText: delta.partial_json || "",
               displayMode: "params",
               mergeKey: `claude:tool:${packet.run_id || "run"}:${nested.index}`,
@@ -905,10 +921,12 @@
       if (!fragment) return null;
       if (fragment.stage === "message") {
         const preview = shortenLine(fragment.primaryText, 42);
+        const normalized = String(fragment.primaryText || "").replace(/\s+/g, " ").trim();
+        if (normalized.length < 12) return null;
         return {
           ...fragment,
-          primaryText: "生成回复",
-          secondaryText: preview ? `已产出内容：${preview}` : "已产出内容",
+          primaryText: "",
+          secondaryText: preview ? `已产出：${preview}` : "已产出内容",
           extraText: "",
           displayMode: "plain",
         };
@@ -1034,15 +1052,13 @@
         if (fragment.mergeKey && state.fragmentNodes.has(fragment.mergeKey)) {
           const existing = state.fragmentNodes.get(fragment.mergeKey);
           if (fragment.mergeStrategy === "append") {
-            const shouldAppendPrimary = fragment.stage === "thinking" || fragment.stage === "message";
+            const shouldAppendPrimary = fragment.stage === "thinking";
             const merged = {
               ...fragment,
               primaryText: shouldAppendPrimary
                 ? `${existing.fragment.primaryText || ""}${fragment.primaryText || ""}`
                 : (existing.fragment.primaryText || fragment.primaryText || ""),
-              secondaryText: fragment.stage === "message"
-                ? (fragment.secondaryText || existing.fragment.secondaryText || "")
-                : (fragment.secondaryText || existing.fragment.secondaryText || ""),
+              secondaryText: fragment.secondaryText || existing.fragment.secondaryText || "",
               extraText: `${existing.fragment.extraText || ""}${fragment.extraText || ""}`,
             };
             existing.fragment = merged;
@@ -1174,6 +1190,12 @@
       return sessions;
     }
 
+    function getRunningAgent(sessions) {
+      if (!sessions || typeof sessions !== "object") return null;
+      const entry = Object.entries(sessions).find(([, session]) => session?.status === "running");
+      return entry ? entry[0] : null;
+    }
+
     function collectProcessRuns(events) {
       const runs = [];
       const runsById = new Map();
@@ -1283,7 +1305,7 @@
       return fallback;
     }
 
-    function renderEvents(events) {
+    function renderEvents(events, sessions = null) {
       pendingAgentBubble = null;
       inlineProcessHost = null;
       pendingAgentState = null;
@@ -1313,13 +1335,14 @@
         }
       });
 
-      if (currentSpeaker !== "user") {
-        const pendingRun = [...runs].reverse().find((run) => run.agent === currentSpeaker && !run.completed);
+      const runningAgent = getRunningAgent(sessions);
+      if (runningAgent) {
+        const pendingRun = [...runs].reverse().find((run) => run.agent === runningAgent && !run.completed);
         if (pendingRun) {
           pendingAgentBubble = renderMessage({
-            speaker: currentSpeaker,
+            speaker: runningAgent,
             timestamp: "处理中",
-            content: `${displayName(currentSpeaker)} 正在继续处理…`,
+            content: `${displayName(runningAgent)} 正在继续处理…`,
             pending: true,
             withProcess: true,
           });
@@ -1366,7 +1389,7 @@
       restoreFailureBubble();
       renderSessions(snapshot.sessions);
       currentSpeaker = snapshot.state.current_speaker;
-      renderEvents(snapshot.events);
+      renderEvents(snapshot.events, snapshot.sessions || {});
       const failedAgent = Object.entries(snapshot.sessions || {}).find(([, session]) => session?.status === "error")?.[0];
       if (preservedFailureBubble || failedAgent) {
         runStatus.textContent = `上一轮失败，当前停在 ${failedAgent || snapshot.state.current_speaker}。`;
@@ -1896,11 +1919,16 @@
     renderOrderChips();
     syncComposerControls();
     resizeComposer();
-    renderEvents(initialEvents);
-    if ("{{ topic.state.current_speaker }}".trim() !== "user" && !autoContinuing) {
+    applySnapshot(initialSnapshot);
+
+    (async function bootstrapSnapshotState() {
+      const freshSnapshot = await refreshTopicSnapshotSafely();
+      const effectiveSnapshot = freshSnapshot || initialSnapshot;
+      const runningAgent = getRunningAgent(effectiveSnapshot.sessions || {});
+      if (!runningAgent || autoContinuing) return;
       autoContinuing = true;
       setRoundRunning(false);
-      runStatus.textContent = `检测到当前停在 {{ topic.state.current_speaker }}，等待后台任务完成…`;
+      runStatus.textContent = `检测到当前停在 ${displayName(runningAgent)}，等待后台任务完成…`;
 
       (async function waitAndContinue() {
         var maxRetries = 60; // 3s * 60 = 3 minutes max
@@ -1950,7 +1978,7 @@
         syncComposerControls();
         renderOrderChips();
       })();
-    }
+    })();
   </script>
 </body>
 </html>

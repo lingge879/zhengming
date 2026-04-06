@@ -12,6 +12,7 @@ from ..services.event_service import read_events
 from ..services.orchestrator import (
     cancel_topic,
     handle_user_message,
+    reconcile_orphaned_run,
     run_current_agent,
     stream_continue_round,
     stream_current_agent,
@@ -132,6 +133,7 @@ def cancel_round(slug: str):
 
 @router.get("/snapshot")
 def topic_snapshot(slug: str):
+    reconcile_orphaned_run(slug)
     return {
         "state": load_state(slug),
         "sessions": load_sessions(slug),
