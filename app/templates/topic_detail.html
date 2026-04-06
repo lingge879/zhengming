@@ -901,8 +901,19 @@
       return escapeHtml(fragment.primaryText).replaceAll("\n", "<br>");
     }
 
-    function isRenderableProcessFragment(fragment) {
-      return fragment.stage !== "message";
+    function makeProcessDisplayFragment(fragment) {
+      if (!fragment) return null;
+      if (fragment.stage === "message") {
+        const preview = shortenLine(fragment.primaryText, 42);
+        return {
+          ...fragment,
+          primaryText: "生成回复",
+          secondaryText: preview ? `已产出内容：${preview}` : "已产出内容",
+          extraText: "",
+          displayMode: "plain",
+        };
+      }
+      return fragment;
     }
 
     function buildActivityNode(fragment) {
@@ -1014,7 +1025,9 @@
     }
 
     function appendProcessFragments(list, state, packet) {
-      const fragments = packetToFragments(packet).filter(isRenderableProcessFragment);
+      const fragments = packetToFragments(packet)
+        .map(makeProcessDisplayFragment)
+        .filter(Boolean);
       state.packets.push(packet);
       fragments.forEach((fragment) => {
         state.stats[fragment.stage] = (state.stats[fragment.stage] || 0) + 1;
@@ -1027,6 +1040,9 @@
               primaryText: shouldAppendPrimary
                 ? `${existing.fragment.primaryText || ""}${fragment.primaryText || ""}`
                 : (existing.fragment.primaryText || fragment.primaryText || ""),
+              secondaryText: fragment.stage === "message"
+                ? (fragment.secondaryText || existing.fragment.secondaryText || "")
+                : (fragment.secondaryText || existing.fragment.secondaryText || ""),
               extraText: `${existing.fragment.extraText || ""}${fragment.extraText || ""}`,
             };
             existing.fragment = merged;
