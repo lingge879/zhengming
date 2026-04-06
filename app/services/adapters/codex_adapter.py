@@ -68,6 +68,17 @@ def stream_codex(
         "session_id": session_id,
         "cmd": cmd,
     }
+    append_event(
+        slug,
+        {
+            "type": "run.started",
+            "agent": "codex",
+            "run_id": run_id,
+            "session_id": session_id,
+            "cmd": cmd,
+            "ts": now_iso(),
+        },
+    )
 
     process = subprocess.Popen(
         cmd,
@@ -184,6 +195,18 @@ def stream_codex(
         "event_count": event_count,
         "message": result.message,
     }
+    append_event(
+        slug,
+        {
+            "type": "run.completed",
+            "agent": "codex",
+            "run_id": run_id,
+            "session_id": thread_id,
+            "event_count": event_count,
+            "message": result.message,
+            "ts": now_iso(),
+        },
+    )
     return result
 
 

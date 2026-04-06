@@ -215,6 +215,17 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         "turn_no": state["turn_no"],
         "session_id": session_id,
     }
+    append_event(
+        slug,
+        {
+            "type": "orchestrator.started",
+            "agent": agent,
+            "current_speaker": agent,
+            "turn_no": state["turn_no"],
+            "session_id": session_id,
+            "ts": now_iso(),
+        },
+    )
     logger.info("[%s] orchestrator.started agent=%s turn=%s session=%s", slug, agent, state["turn_no"], session_id)
 
     prompt, unread_messages, delivered_upto = build_agent_prompt(slug, agent)
@@ -310,6 +321,19 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         "turn_no": state["turn_no"],
         "message": result.message,
     }
+    append_event(
+        slug,
+        {
+            "type": "orchestrator.completed",
+            "agent": agent,
+            "run_id": result.run_id,
+            "session_id": result.session_id,
+            "next_speaker": state["current_speaker"],
+            "turn_no": state["turn_no"],
+            "message": result.message,
+            "ts": now_iso(),
+        },
+    )
 
 
 def handle_user_message(slug: str, content: str) -> None:

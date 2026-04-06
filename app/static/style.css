@@ -801,8 +801,8 @@ body.chat-body .primary-button {
 
 /* ── 过程面板 ── */
 .inline-process {
-  margin-top: 10px; padding-top: 8px;
-  border-top: 1px solid var(--line-light);
+  margin-bottom: 10px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-light);
 }
 .inline-process-title {
   display: inline-flex; align-items: center;
@@ -813,14 +813,137 @@ body.chat-body .primary-button {
 }
 .inline-process-title::-webkit-details-marker { display: none; }
 .inline-process-title::before {
-  content: "B8"; font-size: 11px;
+  content: "\25B8"; font-size: 11px;
   transition: transform 120ms ease;
 }
 .inline-process[open] .inline-process-title::before { transform: rotate(90deg); }
 .inline-process:not([open]) .inline-process-list { display: none; }
 .inline-process.is-live .inline-process-list { display: flex; }
 
-.inline-process-list { display: flex; flex-direction: column; gap: 6px; }
+.inline-process-list { display: flex; flex-direction: column; gap: 4px; }
+
+/* Activity nodes */
+.process-activity {
+  padding: 7px 9px;
+  background: rgba(139,117,54,0.035);
+  border-radius: 3px;
+  border-left: 2px solid rgba(139,117,54,0.18);
+}
+.process-activity.is-streaming {
+  background: rgba(139,117,54,0.06);
+}
+.process-activity.is-error {
+  background: rgba(180,60,40,0.06);
+  border-left: 2px solid rgba(180,60,40,0.4);
+}
+.process-activity-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(139,117,54,0.08);
+}
+.process-activity-badge.is-lifecycle {
+  background: rgba(107,94,79,0.12);
+  color: #6b5e4f;
+}
+.process-activity-badge.is-thinking {
+  background: rgba(59,75,140,0.12);
+  color: #435289;
+}
+.process-activity-badge.is-message {
+  background: rgba(160,82,45,0.12);
+  color: #8e5532;
+}
+.process-activity-badge.is-tool,
+.process-activity-badge.is-command {
+  background: rgba(59,129,140,0.12);
+  color: #366f77;
+}
+.process-activity-badge.is-file,
+.process-activity-badge.is-search,
+.process-activity-badge.is-todo {
+  background: rgba(139,117,54,0.14);
+  color: #78632f;
+}
+.process-activity-badge.is-meta {
+  background: rgba(107,94,79,0.10);
+  color: #7b6f60;
+}
+.process-activity-badge.is-error {
+  background: rgba(179,58,43,0.14);
+  color: #a1372b;
+}
+.process-activity-badge.is-analyze {
+  background: rgba(80,110,150,0.10);
+  color: #53697f;
+}
+.process-activity-badge.is-execute {
+  background: rgba(105,120,75,0.12);
+  color: #617147;
+}
+.process-activity-badge.is-compose {
+  background: rgba(138,95,55,0.12);
+  color: #875e36;
+}
+.process-activity-title {
+  font-size: 11px; font-weight: 700; color: var(--system);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.process-activity.is-streaming .process-activity-title::after {
+  content: " \2026";
+  color: var(--muted);
+}
+.process-activity-detail {
+  font-size: 11px; color: var(--ink); line-height: 1.5;
+  margin-top: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.process-activity-detail p,
+.process-activity-detail ul,
+.process-activity-detail ol,
+.process-activity-detail pre {
+  margin: 0;
+}
+.process-activity-secondary {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 4px;
+  word-break: break-word;
+}
+.process-outcome {
+  font-size: 11px; color: var(--muted); line-height: 1.4;
+  margin-top: 2px; padding-left: 8px;
+  border-left: 2px solid rgba(139,117,54,0.15);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.process-activity-list {
+  font-size: 11px;
+  color: var(--ink);
+  line-height: 1.5;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(139,117,54,0.04);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Hidden content during generation */
+.message-content.is-hidden {
+  display: none;
+}
+
+/* Legacy items */
 .inline-process-item {
   padding: 6px 8px;
   border-left: 2px solid var(--line);

@@ -71,6 +71,17 @@ def stream_claude(
         "session_id": session_id,
         "cmd": cmd,
     }
+    append_event(
+        slug,
+        {
+            "type": "run.started",
+            "agent": "claudecode",
+            "run_id": run_id,
+            "session_id": session_id,
+            "cmd": cmd,
+            "ts": now_iso(),
+        },
+    )
 
     process = subprocess.Popen(
         cmd,
@@ -191,6 +202,18 @@ def stream_claude(
         "event_count": event_count,
         "message": result.message,
     }
+    append_event(
+        slug,
+        {
+            "type": "run.completed",
+            "agent": "claudecode",
+            "run_id": run_id,
+            "session_id": current_session_id,
+            "event_count": event_count,
+            "message": result.message,
+            "ts": now_iso(),
+        },
+    )
     return result
 
 

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=chunqiu05" />
+  <link rel="stylesheet" href="/static/style.css?v=chunqiu06" />
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script>mermaid.initialize({ startOnLoad: false, theme: "neutral" });</script>
 </head>
@@ -426,13 +426,13 @@
               </svg>
             </button>
           </div>
-          <div class="message-content">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
           ${withProcess ? `
           <details class="inline-process ${pending ? "is-live" : ""}" data-inline-process ${pending ? "open" : ""}>
-            <summary class="inline-process-title">${pending ? "生成过程" : processToggleLabel(false)}</summary>
+            <summary class="inline-process-title">${pending ? "执行过程" : processToggleLabel(false)}</summary>
             <div class="inline-process-list"></div>
           </details>
           ` : ""}
+          <div class="message-content${pending && withProcess ? " is-hidden" : ""}">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
         </div>
       `;
       messageStream.appendChild(row);
@@ -440,9 +440,10 @@
       if (processNode) {
         const summaryNode = processNode.querySelector(".inline-process-title");
         processNode.addEventListener("toggle", () => {
+          if (processNode.dataset.fixedSummary === "true") return;
           if (!summaryNode) return;
           summaryNode.textContent = processNode.classList.contains("is-live")
-            ? "生成过程"
+            ? "执行过程"
             : processToggleLabel(processNode.open);
         });
       }
@@ -484,91 +485,20 @@
 
     function ensurePendingState(agent) {
       if (!pendingAgentState || pendingAgentState.agent !== agent) {
-        pendingAgentState = {
-          agent,
-          textPreview: "",
-          stepKeys: new Set(),
-          packets: [],
-          processNodes: new Map(),
-        };
+        pendingAgentState = createProcessState(agent);
       }
       return pendingAgentState;
     }
 
-    function deriveProcessKey(packet) {
-      if (packet.type !== "agent.event") {
-        return `${packet.type}:${packet.agent || "system"}`;
-      }
-
-      const event = packet.event || {};
-      if (packet.agent === "codex") {
-        const item = event.item || {};
-        if (item.type === "command_execution") return `codex:command:${item.command || "unknown"}`;
-        if (item.type === "reasoning") return "codex:reasoning";
-        if (item.type === "agent_message") return "codex:agent_message";
-        return `codex:event:${event.type || "unknown"}`;
-      }
-
-      if (packet.agent === "claudecode") {
-        const nested = event.event || {};
-        const delta = nested.delta || {};
-        if (event.type === "assistant") return "claudecode:assistant";
-        if (event.type === "stream_event" && nested.type === "content_block_delta" && delta.type === "text_delta") {
-          return "claudecode:text_delta";
-        }
-        if (event.type === "stream_event" && nested.type === "content_block_delta" && delta.type === "thinking_delta") {
-          return "claudecode:thinking_delta";
-        }
-        if (event.type === "stream_event") return `claudecode:stream:${nested.type || "unknown"}`;
-        return `claudecode:event:${event.type || "unknown"}`;
-      }
-
-      return `${packet.agent || "agent"}:${packet.event?.type || packet.type}`;
-    }
-
-    function summarizePacket(packet) {
-      if (packet.type === "round.started") return `新一轮开始，AI 顺序：${packet.agent_order.join(" -> ")}`;
-      if (packet.type === "user.message.accepted") return `用户消息已写入，下一位：${packet.next_speaker}`;
-      if (packet.type === "orchestrator.started") return `${packet.agent} 开始处理本轮发言`;
-      if (packet.type === "run.started") return `${packet.agent} 已启动本地 CLI`;
-      if (packet.type === "run.completed") return `${packet.agent} 已完成本轮生成`;
-      if (packet.type === "orchestrator.completed") return `${packet.agent} 发言已写入数据库消息流，下一位：${packet.next_speaker}`;
-      if (packet.type === "agent.event") {
-        const event = packet.event || {};
-        if (packet.agent === "codex") {
-          const item = event.item || {};
-          if (event.type === "thread.started") return "Codex 会话已连接";
-          if (event.type === "turn.started") return "Codex 开始当前轮回复";
-          if (event.type === "turn.completed") return "Codex 完成当前轮回复";
-          if (event.type === "error") return `Codex 运行报错：${shorten(event.message, 90)}`;
-          if (event.type === "turn.failed") return `Codex 本轮失败：${shorten(event.error?.message, 90)}`;
-          if (item.type === "command_execution") return `Codex 正在执行：${extractShellIntent(item.command)}`;
-          if (item.type === "reasoning") return "Codex 正在整理上下文并规划回复";
-          if (item.type === "agent_message") return `Codex 正在形成回复：${shorten(item.text, 72)}`;
-          return `Codex 事件：${event.type || "unknown"}`;
-        }
-        if (packet.agent === "claudecode") {
-          const eventType = event.type || "unknown";
-          if (eventType === "system") return "ClaudeCode 会话已初始化";
-          if (eventType === "assistant") return `ClaudeCode 已生成完整回复草稿：${shorten(extractClaudeText(event), 72)}`;
-          if (eventType === "result") return "ClaudeCode 已完成当前轮回复";
-          if (eventType === "error") return `ClaudeCode 运行报错：${shorten(event.message, 90)}`;
-          if (eventType === "stream_event") {
-            const nested = event.event || {};
-            if (nested.type === "message_start") return "ClaudeCode 开始生成消息";
-            if (nested.type === "message_stop") return "ClaudeCode 结束消息生成";
-            if (nested.type === "content_block_delta") {
-              const delta = nested.delta || {};
-              if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文";
-              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(pendingAgentState?.textPreview || delta.text, 72)}`;
-            }
-          }
-          return `ClaudeCode 事件：${eventType}`;
-        }
-      }
-      if (packet.type === "error") return `错误：${packet.message}`;
-      if (packet.type === "snapshot") return "页面状态已刷新";
-      return packet.type || "event";
+    function createProcessState(agent) {
+      return {
+        agent,
+        textPreview: "",
+        packets: [],
+        fragmentNodes: new Map(),
+        activitySeq: 0,
+        stats: { thinking: 0, message: 0, tool: 0, command: 0, file: 0, search: 0, todo: 0, error: 0, meta: 0, lifecycle: 0 },
+      };
     }
 
     function extractClaudeText(event) {
@@ -581,101 +511,539 @@
         .trim();
     }
 
-    function packetDetail(packet) {
-      if (packet.type === "round.started") return "系统已接受你的顺序编排，准备开始这一轮自动回复。";
-      if (packet.type === "user.message.accepted") return `你的消息已写入数据库，接下来由 ${packet.next_speaker} 开始回复。`;
-      if (packet.type === "orchestrator.started") return `${packet.agent} 正在读取共享规则、未读消息和当前状态。`;
-      if (packet.type === "run.started") return `${packet.agent} 的本地运行已启动。`;
-      if (packet.type === "run.completed") return `${packet.agent} 已完成本轮生成，结果即将写入主对话。`;
-      if (packet.type === "orchestrator.completed") return `${packet.agent} 的回复已写入数据库消息流。`;
-      if (packet.type === "error") return packet.message || "运行出错";
-      if (packet.type === "snapshot") return "页面状态已经同步到最新。";
-      if (packet.type === "agent.event") {
-        const event = packet.event || {};
-        if (packet.agent === "codex") {
-          const item = event.item || {};
-          if (event.type === "thread.started") return "Codex 会话已建立。";
-          if (event.type === "turn.started") return "Codex 开始当前轮回复。";
-          if (event.type === "turn.completed") return "Codex 完成当前轮回复。";
-          if (event.type === "error") return `Codex 返回错误：${event.message || "未知错误"}`;
-          if (event.type === "turn.failed") return `Codex 本轮失败：${event.error?.message || "未知原因"}`;
-          if (item.type === "command_execution") {
-            const intent = extractShellIntent(item.command);
-            const output = shorten(item.aggregated_output, 160);
-            if (item.status === "completed" && output) return `${intent}。输出摘要：${output}`;
-            return `${intent}。命令：${shorten(item.command, 140)}`;
-          }
-          if (item.type === "reasoning") return "Codex 正在分析上下文、已有发言和当前轮状态。";
-          if (item.type === "agent_message") return `Codex 当前形成的文本片段：${shorten(item.text, 180)}`;
-        }
-        if (packet.agent === "claudecode") {
-          const eventType = event.type || "";
-          if (eventType === "system") return "ClaudeCode 会话已初始化。";
-          if (eventType === "assistant") return `ClaudeCode 当前完整草稿：${shorten(extractClaudeText(event), 180)}`;
-          if (eventType === "result") return "ClaudeCode 已完成当前轮回复。";
-          if (eventType === "error") return `ClaudeCode 返回错误：${event.message || "未知错误"}`;
-          if (eventType === "stream_event") {
-            const nested = event.event || {};
-            if (nested.type === "message_start") return "ClaudeCode 开始生成消息。";
-            if (nested.type === "message_stop") return "ClaudeCode 结束消息生成。";
-            if (nested.type === "content_block_delta") {
-              const delta = nested.delta || {};
-              if (delta.type === "thinking_delta") return "ClaudeCode 正在分析共享上下文并组织表述。";
-              if (delta.type === "text_delta") return `ClaudeCode 正在输出：${shorten(pendingAgentState?.textPreview || delta.text, 180)}`;
-            }
-          }
-        }
-      }
-      return "过程事件已记录。";
+    function extractClaudeThinking(event) {
+      const message = event?.message || {};
+      const content = Array.isArray(message.content) ? message.content : [];
+      return content
+        .filter((item) => item?.type === "thinking")
+        .map((item) => item.thinking || "")
+        .join("")
+        .trim();
     }
 
-    function buildProcessEntry(packet) {
-      const wrapper = document.createElement("div");
-      wrapper.className = "inline-process-item";
-      wrapper.dataset.processKey = deriveProcessKey(packet);
+    const STAGE_LABELS = {
+      lifecycle: "流程",
+      thinking: "思考",
+      message: "回复",
+      tool: "工具",
+      command: "命令",
+      file: "改动",
+      search: "检索",
+      todo: "待办",
+      error: "错误",
+      meta: "系统",
+    };
 
-      const summary = document.createElement("div");
-      summary.className = "inline-process-summary";
-      summary.textContent = summarizePacket(packet);
-      wrapper.appendChild(summary);
-
-      const detail = packetDetail(packet);
-      if (detail) {
-        const detailNode = document.createElement("div");
-        detailNode.className = "process-detail";
-        detailNode.textContent = detail;
-        wrapper.appendChild(detailNode);
+    function formatJson(value) {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch (_) {
+        return String(value ?? "");
       }
-
-      const raw = document.createElement("details");
-      raw.className = "process-raw-wrap";
-      raw.innerHTML = `
-        <summary>查看原始事件</summary>
-        <pre class="process-raw">${escapeHtml(JSON.stringify(packet, null, 2))}</pre>
-      `;
-      wrapper.appendChild(raw);
-      return wrapper;
     }
 
-    function updateProcessEntry(node, packet) {
-      const summaryNode = node.querySelector(".inline-process-summary");
-      if (summaryNode) summaryNode.textContent = summarizePacket(packet);
+    function formatUsage(usage) {
+      if (!usage || typeof usage !== "object") return "";
+      const parts = [];
+      if (usage.input_tokens != null) parts.push(`input ${usage.input_tokens}`);
+      if (usage.cached_input_tokens != null) parts.push(`cached ${usage.cached_input_tokens}`);
+      if (usage.output_tokens != null) parts.push(`output ${usage.output_tokens}`);
+      return parts.join(" · ");
+    }
 
-      const detailText = packetDetail(packet);
-      let detailNode = node.querySelector(".process-detail");
-      if (detailText) {
-        if (!detailNode) {
-          detailNode = document.createElement("div");
-          detailNode.className = "process-detail";
-          node.insertBefore(detailNode, node.querySelector(".process-raw-wrap"));
-        }
-        detailNode.textContent = detailText;
-      } else if (detailNode) {
-        detailNode.remove();
+    function makeFragment(packet, fragment) {
+      return {
+        provider: packet.agent || "system",
+        agent: packet.agent || null,
+        runId: packet.run_id || null,
+        stage: fragment.stage || "meta",
+        importance: fragment.importance || "medium",
+        primaryText: fragment.primaryText || "",
+        secondaryText: fragment.secondaryText || "",
+        extraText: fragment.extraText || "",
+        displayMode: fragment.displayMode || "plain",
+        mergeKey: fragment.mergeKey || null,
+        mergeStrategy: fragment.mergeStrategy || "append",
+        rawEvent: packet,
+      };
+    }
+
+    function buildCodexFragments(packet) {
+      const event = packet.event || {};
+      const item = event.item || {};
+      const fragments = [];
+
+      if (event.type === "thread.started") {
+        fragments.push(makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "low",
+          primaryText: "线程已建立",
+          secondaryText: event.thread_id || packet.session_id || "",
+        }));
+      } else if (event.type === "turn.started") {
+        fragments.push(makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "low",
+          primaryText: "开始处理本轮输入",
+        }));
+      } else if (event.type === "turn.completed") {
+        fragments.push(makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "low",
+          primaryText: "本轮处理完成",
+          secondaryText: formatUsage(event.usage),
+        }));
+      } else if (event.type === "turn.failed") {
+        fragments.push(makeFragment(packet, {
+          stage: "error",
+          importance: "high",
+          primaryText: event.error?.message || "本轮处理失败",
+        }));
+      } else if (event.type === "error") {
+        fragments.push(makeFragment(packet, {
+          stage: "error",
+          importance: "high",
+          primaryText: event.message || "运行出错",
+        }));
+      } else if (item.type === "agent_message") {
+        fragments.push(makeFragment(packet, {
+          stage: "message",
+          importance: "high",
+          primaryText: item.text || "",
+          displayMode: "markdown",
+        }));
+      } else if (item.type === "reasoning") {
+        fragments.push(makeFragment(packet, {
+          stage: "thinking",
+          importance: "high",
+          primaryText: item.text || "",
+          mergeKey: item.id ? `codex:reasoning:${item.id}` : null,
+          mergeStrategy: "replace",
+        }));
+      } else if (item.type === "command_execution") {
+        fragments.push(makeFragment(packet, {
+          stage: "command",
+          importance: "high",
+          primaryText: item.command || "",
+          secondaryText: `状态：${item.status || "unknown"}${item.exit_code != null ? ` · 退出码 ${item.exit_code}` : ""}`,
+          extraText: item.aggregated_output || "",
+          displayMode: item.aggregated_output ? "code" : "plain",
+          mergeKey: item.id ? `codex:command:${item.id}` : null,
+          mergeStrategy: "replace",
+        }));
+      } else if (item.type === "file_change") {
+        const changes = Array.isArray(item.changes) ? item.changes.map((change) => `${change.kind} ${change.path}`).join("\n") : "";
+        fragments.push(makeFragment(packet, {
+          stage: "file",
+          importance: "medium",
+          primaryText: "文件变更",
+          extraText: changes,
+          displayMode: "list",
+        }));
+      } else if (item.type === "mcp_tool_call") {
+        fragments.push(makeFragment(packet, {
+          stage: "tool",
+          importance: "high",
+          primaryText: `${item.server}.${item.tool}`,
+          secondaryText: `状态：${item.status || "unknown"}`,
+          extraText: item.error?.message || formatJson(item.result || item.arguments || ""),
+          displayMode: typeof item.error?.message === "string" ? "plain" : "code",
+          mergeKey: item.id ? `codex:mcp:${item.id}` : null,
+          mergeStrategy: "replace",
+        }));
+      } else if (item.type === "web_search") {
+        fragments.push(makeFragment(packet, {
+          stage: "search",
+          importance: "medium",
+          primaryText: item.query || "",
+        }));
+      } else if (item.type === "todo_list") {
+        const listText = Array.isArray(item.items) ? item.items.map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`).join("\n") : "";
+        fragments.push(makeFragment(packet, {
+          stage: "todo",
+          importance: "medium",
+          primaryText: "待办列表",
+          extraText: listText,
+          displayMode: "list",
+          mergeKey: item.id ? `codex:todo:${item.id}` : null,
+          mergeStrategy: "replace",
+        }));
+      } else if (item.type === "error") {
+        fragments.push(makeFragment(packet, {
+          stage: "error",
+          importance: "high",
+          primaryText: item.message || "非致命错误",
+        }));
       }
 
-      const rawNode = node.querySelector(".process-raw");
-      if (rawNode) rawNode.textContent = JSON.stringify(packet, null, 2);
+      return fragments;
+    }
+
+    function buildClaudeFragments(packet) {
+      const event = packet.event || {};
+      const fragments = [];
+
+      if (event.type === "system") {
+        if (event.subtype === "init") {
+          fragments.push(makeFragment(packet, {
+            stage: "lifecycle",
+            importance: "low",
+            primaryText: "会话初始化完成",
+            secondaryText: [event.session_id ? `session ${event.session_id}` : "", event.model ? `model ${event.model}` : ""].filter(Boolean).join(" · "),
+          }));
+        } else if (event.subtype === "api_retry") {
+          fragments.push(makeFragment(packet, {
+            stage: "meta",
+            importance: "high",
+            primaryText: "API 重试",
+            secondaryText: `第 ${event.attempt}/${event.max_retries} 次 · status ${event.error_status || ""} · ${event.error || ""}`.trim(),
+          }));
+        } else {
+          fragments.push(makeFragment(packet, {
+            stage: "meta",
+            importance: "medium",
+            primaryText: `系统事件：${event.subtype || "system"}`,
+          }));
+        }
+      } else if (event.type === "assistant") {
+        const content = Array.isArray(event.message?.content) ? event.message.content : [];
+        content.forEach((item, index) => {
+          if (item?.type === "thinking" && item.thinking) {
+            fragments.push(makeFragment(packet, {
+              stage: "thinking",
+              importance: "high",
+              primaryText: item.thinking,
+              displayMode: "plain",
+              mergeKey: `claude:thinking:${packet.run_id || "run"}:${index}`,
+              mergeStrategy: "replace",
+            }));
+          }
+          if (item?.type === "text" && item.text) {
+            fragments.push(makeFragment(packet, {
+              stage: "message",
+              importance: "high",
+              primaryText: item.text,
+              displayMode: "markdown",
+              mergeKey: `claude:text:${packet.run_id || "run"}:${index}`,
+              mergeStrategy: "replace",
+            }));
+          }
+        });
+      } else if (event.type === "result") {
+        fragments.push(makeFragment(packet, {
+          stage: "meta",
+          importance: "medium",
+          primaryText: "结果已生成",
+          secondaryText: [event.subtype ? `subtype ${event.subtype}` : "", event.stop_reason ? `stop ${event.stop_reason}` : ""].filter(Boolean).join(" · "),
+          extraText: event.usage ? formatJson(event.usage) : "",
+          displayMode: event.usage ? "code" : "plain",
+        }));
+      } else if (event.type === "error") {
+        fragments.push(makeFragment(packet, {
+          stage: "error",
+          importance: "high",
+          primaryText: event.message || "运行出错",
+        }));
+      } else if (event.type === "stream_event") {
+        const nested = event.event || {};
+        if (nested.type === "message_start") {
+          fragments.push(makeFragment(packet, {
+            stage: "lifecycle",
+            importance: "low",
+            primaryText: "消息流开始",
+            secondaryText: [nested.message?.id ? `message ${nested.message.id}` : "", nested.message?.model ? nested.message.model : ""].filter(Boolean).join(" · "),
+          }));
+        } else if (nested.type === "content_block_start") {
+          fragments.push(makeFragment(packet, {
+            stage: "lifecycle",
+            importance: "low",
+            primaryText: `内容块开始`,
+            secondaryText: `index ${nested.index} · ${nested.content_block?.type || "unknown"}`,
+          }));
+        } else if (nested.type === "content_block_delta") {
+          const delta = nested.delta || {};
+          if (delta.type === "text_delta" && delta.text) {
+            fragments.push(makeFragment(packet, {
+              stage: "message",
+              importance: "high",
+              primaryText: delta.text,
+              displayMode: "markdown",
+              mergeKey: `claude:text:${packet.run_id || "run"}:${nested.index}`,
+              mergeStrategy: "append",
+            }));
+          } else if (delta.type === "thinking_delta" && delta.thinking) {
+            fragments.push(makeFragment(packet, {
+              stage: "thinking",
+              importance: "high",
+              primaryText: delta.thinking,
+              mergeKey: `claude:thinking:${packet.run_id || "run"}:${nested.index}`,
+              mergeStrategy: "append",
+            }));
+          } else if (delta.type === "input_json_delta") {
+            fragments.push(makeFragment(packet, {
+              stage: "tool",
+              importance: "high",
+              primaryText: "工具输入参数增量",
+              extraText: delta.partial_json || "",
+              displayMode: "code",
+              mergeKey: `claude:input-json:${packet.run_id || "run"}:${nested.index}`,
+              mergeStrategy: "append",
+            }));
+          }
+        } else if (nested.type === "content_block_stop") {
+          fragments.push(makeFragment(packet, {
+            stage: "lifecycle",
+            importance: "low",
+            primaryText: "内容块结束",
+            secondaryText: `index ${nested.index}`,
+          }));
+        } else if (nested.type === "message_delta") {
+          fragments.push(makeFragment(packet, {
+            stage: "meta",
+            importance: "low",
+            primaryText: "消息元信息更新",
+            secondaryText: [nested.delta?.stop_reason ? `stop ${nested.delta.stop_reason}` : "", formatUsage(nested.usage || {})].filter(Boolean).join(" · "),
+          }));
+        } else if (nested.type === "message_stop") {
+          fragments.push(makeFragment(packet, {
+            stage: "lifecycle",
+            importance: "low",
+            primaryText: "消息流结束",
+          }));
+        } else if (nested.type === "error") {
+          fragments.push(makeFragment(packet, {
+            stage: "error",
+            importance: "high",
+            primaryText: nested.error?.message || nested.message || "流式事件错误",
+          }));
+        }
+      }
+
+      return fragments;
+    }
+
+    function packetToFragments(packet) {
+      if (!packet || typeof packet !== "object" || packet.type === "snapshot") return [];
+      const isStoredAgentEvent = !packet.type && packet.event && (packet.source === "codex_cli" || packet.source === "claude_cli");
+      const isStoredRawLine = !packet.type && packet.raw_line && (packet.source === "codex_cli" || packet.source === "claude_cli");
+
+      if (packet.type === "orchestrator.started") {
+        return [makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "medium",
+          primaryText: `${displayName(packet.agent)} 开始本轮处理`,
+          secondaryText: [packet.turn_no != null ? `turn ${packet.turn_no}` : "", packet.session_id ? `session ${packet.session_id}` : ""].filter(Boolean).join(" · "),
+        })];
+      }
+      if (packet.type === "run.started") {
+        return [makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "medium",
+          primaryText: `${displayName(packet.agent)} 启动本地 CLI`,
+          secondaryText: Array.isArray(packet.cmd) ? packet.cmd.join(" ") : "",
+        })];
+      }
+      if (packet.type === "run.completed") {
+        return [makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "medium",
+          primaryText: `${displayName(packet.agent)} 运行完成`,
+          secondaryText: packet.event_count != null ? `事件 ${packet.event_count} 条` : "",
+        })];
+      }
+      if (packet.type === "orchestrator.completed") {
+        return [makeFragment(packet, {
+          stage: "lifecycle",
+          importance: "medium",
+          primaryText: `${displayName(packet.agent)} 已提交正式回复`,
+          secondaryText: [packet.next_speaker ? `next ${displayName(packet.next_speaker)}` : "", packet.turn_no != null ? `turn ${packet.turn_no}` : ""].filter(Boolean).join(" · "),
+        })];
+      }
+      if (packet.type === "round.started") {
+        return [makeFragment(packet, {
+          stage: "meta",
+          importance: "low",
+          primaryText: `本轮顺序：${(packet.agent_order || []).map(displayName).join(" → ")}`,
+        })];
+      }
+      if (packet.type === "round.resume") {
+        return [makeFragment(packet, {
+          stage: "meta",
+          importance: "medium",
+          primaryText: `继续上一轮未完成回复`,
+          secondaryText: packet.current_speaker ? displayName(packet.current_speaker) : "",
+        })];
+      }
+      if (packet.type === "round.cancelled" || packet.type === "error") {
+        return [makeFragment(packet, {
+          stage: "error",
+          importance: "high",
+          primaryText: packet.message || "运行失败",
+        })];
+      }
+      if (packet.type === "agent.event" || isStoredAgentEvent) {
+        if (packet.agent === "codex") return buildCodexFragments(packet);
+        if (packet.agent === "claudecode") return buildClaudeFragments(packet);
+      }
+      if (packet.type === "agent.raw_line" || isStoredRawLine) {
+        return [makeFragment(packet, {
+          stage: "meta",
+          importance: "low",
+          primaryText: "原始输出",
+          extraText: packet.raw_line || "",
+          displayMode: "code",
+        })];
+      }
+      if (!packet.type && packet.summary) {
+        return [];
+      }
+      return [makeFragment(packet, {
+        stage: "meta",
+        importance: "low",
+        primaryText: packet.type || "event",
+      })];
+    }
+
+    function renderFragmentText(fragment) {
+      if (!fragment.primaryText) return "";
+      if (fragment.displayMode === "markdown") return renderMarkdown(fragment.primaryText);
+      return escapeHtml(fragment.primaryText).replaceAll("\n", "<br>");
+    }
+
+    function buildActivityNode(fragment) {
+      const node = document.createElement("div");
+      node.className = `process-activity${fragment.stage === "error" ? " is-error" : ""}`;
+
+      const badgeEl = document.createElement("div");
+      badgeEl.className = `process-activity-badge is-${fragment.stage || "meta"}`;
+      badgeEl.textContent = STAGE_LABELS[fragment.stage] || "系统";
+      node.appendChild(badgeEl);
+
+      if (fragment.primaryText) {
+        const detailEl = document.createElement("div");
+        detailEl.className = "process-activity-detail";
+        detailEl.innerHTML = renderFragmentText(fragment);
+        node.appendChild(detailEl);
+      }
+
+      if (fragment.secondaryText) {
+        const secondaryEl = document.createElement("div");
+        secondaryEl.className = "process-activity-secondary";
+        secondaryEl.textContent = fragment.secondaryText;
+        node.appendChild(secondaryEl);
+      }
+
+      if (fragment.extraText) {
+        const extraEl = document.createElement(fragment.displayMode === "code" ? "pre" : "div");
+        extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
+        extraEl.textContent = fragment.extraText;
+        node.appendChild(extraEl);
+      }
+
+      const rawWrap = document.createElement("details");
+      rawWrap.className = "process-raw-wrap";
+      const rawSummary = document.createElement("summary");
+      rawSummary.textContent = "原始事件";
+      rawWrap.appendChild(rawSummary);
+      const rawEl = document.createElement("pre");
+      rawEl.className = "process-raw";
+      rawEl.textContent = formatJson(fragment.rawEvent);
+      rawWrap.appendChild(rawEl);
+      node.appendChild(rawWrap);
+
+      return node;
+    }
+
+    function updateActivityNode(node, fragment) {
+      const badgeEl = node.querySelector(".process-activity-badge");
+      if (badgeEl) {
+        badgeEl.className = `process-activity-badge is-${fragment.stage || "meta"}`;
+        badgeEl.textContent = STAGE_LABELS[fragment.stage] || "系统";
+      }
+
+      let detailEl = node.querySelector(".process-activity-detail");
+      if (fragment.primaryText) {
+        if (!detailEl) {
+          detailEl = document.createElement("div");
+          detailEl.className = "process-activity-detail";
+          node.insertBefore(detailEl, node.querySelector(".process-activity-secondary"));
+        }
+        detailEl.innerHTML = renderFragmentText(fragment);
+      } else if (detailEl) {
+        detailEl.remove();
+      }
+
+      let secondaryEl = node.querySelector(".process-activity-secondary");
+      if (fragment.secondaryText) {
+        if (!secondaryEl) {
+          secondaryEl = document.createElement("div");
+          secondaryEl.className = "process-activity-secondary";
+          node.appendChild(secondaryEl);
+        }
+        secondaryEl.textContent = fragment.secondaryText;
+      } else if (secondaryEl) {
+        secondaryEl.remove();
+      }
+
+      let extraEl = node.querySelector(".process-outcome, .process-activity-list");
+      if (fragment.extraText) {
+        if (!extraEl) {
+          extraEl = document.createElement(fragment.displayMode === "code" ? "pre" : "div");
+          extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
+          node.appendChild(extraEl);
+        }
+        extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
+        extraEl.textContent = fragment.extraText;
+      } else if (extraEl) {
+        extraEl.remove();
+      }
+
+      let rawEl = node.querySelector(".process-raw");
+      if (!rawEl) {
+        const rawWrap = document.createElement("details");
+        rawWrap.className = "process-raw-wrap";
+        const rawSummary = document.createElement("summary");
+        rawSummary.textContent = "原始事件";
+        rawWrap.appendChild(rawSummary);
+        rawEl = document.createElement("pre");
+        rawEl.className = "process-raw";
+        rawWrap.appendChild(rawEl);
+        node.appendChild(rawWrap);
+      }
+      rawEl.textContent = formatJson(fragment.rawEvent);
+
+      node.classList.toggle("is-error", fragment.stage === "error");
+    }
+
+    function appendProcessFragments(list, state, packet) {
+      const fragments = packetToFragments(packet);
+      state.packets.push(packet);
+      fragments.forEach((fragment) => {
+        state.stats[fragment.stage] = (state.stats[fragment.stage] || 0) + 1;
+        if (fragment.mergeKey && state.fragmentNodes.has(fragment.mergeKey)) {
+          const existing = state.fragmentNodes.get(fragment.mergeKey);
+          if (fragment.mergeStrategy === "append") {
+            const merged = {
+              ...fragment,
+              primaryText: `${existing.fragment.primaryText || ""}${fragment.primaryText || ""}`,
+              extraText: `${existing.fragment.extraText || ""}${fragment.extraText || ""}`,
+            };
+            existing.fragment = merged;
+            updateActivityNode(existing.node, merged);
+          } else {
+            existing.fragment = fragment;
+            updateActivityNode(existing.node, fragment);
+          }
+          return;
+        }
+
+        state.activitySeq += 1;
+        const node = buildActivityNode(fragment);
+        const key = fragment.mergeKey || `fragment:${state.activitySeq}`;
+        state.fragmentNodes.set(key, { node, fragment });
+        list.appendChild(node);
+      });
+      scrollToBottomIfNeeded();
     }
 
     function appendInlineProcess(packet) {
@@ -683,18 +1051,7 @@
       const list = inlineProcessHost.querySelector(".inline-process-list");
       if (!list) return;
       const state = ensurePendingState(packet.agent || pendingAgentState?.agent || "");
-      const key = deriveProcessKey(packet);
-      state.packets.push(packet);
-      const existingNode = state.processNodes.get(key);
-      if (existingNode) {
-        updateProcessEntry(existingNode, packet);
-      } else {
-        const node = buildProcessEntry(packet);
-        state.processNodes.set(key, node);
-        state.stepKeys.add(key);
-        list.appendChild(node);
-      }
-      scrollToBottomIfNeeded();
+      appendProcessFragments(list, state, packet);
     }
 
     function captureFailureBubble() {
@@ -719,13 +1076,7 @@
       const previousHost = inlineProcessHost;
       const previousState = pendingAgentState;
       inlineProcessHost = row.querySelector("[data-inline-process]");
-      pendingAgentState = {
-        agent: preservedFailureBubble.speaker,
-        textPreview: preservedFailureBubble.content,
-        stepKeys: new Set(),
-        packets: [],
-        processNodes: new Map(),
-      };
+      pendingAgentState = null; // force fresh state via ensurePendingState
       preservedFailureBubble.packets.forEach((packet) => appendInlineProcess(packet));
       const processPanel = row.querySelector("[data-inline-process]");
       if (processPanel) processPanel.open = false;
@@ -736,7 +1087,10 @@
     function finalizePendingBubble(packet) {
       if (!pendingAgentBubble || !pendingAgentState) return;
       const contentNode = pendingAgentBubble.querySelector(".message-content");
-      if (contentNode) contentNode.innerHTML = renderMarkdown(packet.message || pendingAgentState.textPreview || "");
+      if (contentNode) {
+        contentNode.innerHTML = renderMarkdown(packet.message || pendingAgentState.textPreview || "");
+        contentNode.classList.remove("is-hidden");
+      }
       const metaTime = pendingAgentBubble.querySelector(".message-meta span");
       if (metaTime) metaTime.textContent = packet.turn_no ? `第 ${packet.turn_no} 轮` : "刚刚";
       pendingAgentBubble.classList.remove("is-pending");
@@ -744,8 +1098,12 @@
       if (processPanel) {
         processPanel.classList.remove("is-live");
         processPanel.open = false;
+        processPanel.dataset.fixedSummary = "true";
         const summaryNode = processPanel.querySelector(".inline-process-title");
-        if (summaryNode) summaryNode.textContent = processToggleLabel(false);
+        if (summaryNode) {
+          const total = pendingAgentState.packets?.length || 0;
+          summaryNode.textContent = total ? `查看全过程（${total} 条）` : "查看全过程";
+        }
       }
       mermaid.run({ nodes: pendingAgentBubble.querySelectorAll(".mermaid") }).catch(() => {});
       mmDebouncedRebuild();
@@ -758,45 +1116,21 @@
       const state = ensurePendingState(packet.agent || pendingAgentState?.agent || "");
       const event = packet.event || {};
 
-      if (packet.type === "orchestrator.started") {
-        contentNode.textContent = `${packet.agent} 正在读取完整上下文并准备回复…`;
-        return;
-      }
-
+      // Update textPreview for codex agent_message
       if (packet.agent === "codex") {
         const item = event.item || {};
-        if (event.type === "error") {
-          contentNode.textContent = `Codex 运行失败：${event.message || "未知错误"}`;
-          return;
-        }
-        if (event.type === "turn.failed") {
-          contentNode.textContent = `Codex 本轮失败：${event.error?.message || "未知原因"}`;
-          return;
-        }
         if (item.type === "agent_message" && item.text) {
           state.textPreview = item.text.trim();
-          contentNode.textContent = state.textPreview;
-          return;
-        }
-        if (item.type === "command_execution") {
-          contentNode.textContent = `正在处理：${extractShellIntent(item.command)}`;
-          return;
         }
       }
 
+      // Update textPreview for claudecode text_delta
       if (packet.agent === "claudecode") {
-        if (event.type === "error") {
-          contentNode.textContent = `ClaudeCode 运行失败：${event.message || "未知错误"}`;
-          return;
-        }
         if (event.type === "assistant") {
           const text = extractClaudeText(event);
           if (text && !state.textPreview) {
-            // Only use full snapshot as fallback when no text_delta has arrived yet
             state.textPreview = text;
-            contentNode.textContent = state.textPreview;
           }
-          return;
         }
         if (event.type === "stream_event") {
           const nested = event.event || {};
@@ -804,34 +1138,205 @@
             const delta = nested.delta || {};
             if (delta.type === "text_delta" && delta.text) {
               state.textPreview += delta.text;
-              contentNode.textContent = state.textPreview || "ClaudeCode 正在生成回复…";
-              return;
-            }
-            if (delta.type === "thinking_delta") {
-              contentNode.textContent = state.textPreview || "ClaudeCode 正在分析共享上下文并组织回复…";
-              return;
             }
           }
         }
       }
-
-      contentNode.textContent = summarizePacket(packet);
+      const fragments = packetToFragments(packet);
+      if (fragments.some((fragment) => fragment.stage === "error")) {
+        contentNode.classList.remove("is-hidden");
+        const errorFragment = fragments.find((fragment) => fragment.stage === "error");
+        contentNode.textContent = errorFragment?.primaryText || "运行失败";
+      }
     }
 
     function renderSessions(sessions) {
       return sessions;
     }
 
+    function collectProcessRuns(events) {
+      const runs = [];
+      const runsById = new Map();
+      const activeRunsByAgent = new Map();
+
+      (events || []).forEach((packet, index) => {
+        if (!packet || typeof packet !== "object" || !packet.agent) return;
+
+        const agent = packet.agent;
+        const runId = packet.run_id || null;
+        let run = runId ? runsById.get(runId) || null : null;
+        const activeRun = activeRunsByAgent.get(agent) || null;
+
+        if (!run && activeRun) {
+          const sameRun = !runId || !activeRun.runId || activeRun.runId === runId;
+          if (sameRun) {
+            run = activeRun;
+            if (runId && !run.runId) {
+              run.runId = runId;
+              runsById.set(runId, run);
+            }
+          }
+        }
+
+        if (!run) {
+          run = {
+            key: runId || `${agent}:${index}`,
+            runId,
+            agent,
+            packets: [],
+            completed: false,
+            failed: false,
+            finalMessage: "",
+          };
+          runs.push(run);
+          if (runId) runsById.set(runId, run);
+        }
+
+        run.packets.push(packet);
+        if (packet.type === "run.completed" && packet.message && !run.finalMessage) {
+          run.finalMessage = packet.message;
+        }
+        if (packet.type === "orchestrator.completed") {
+          run.completed = true;
+          if (packet.message) run.finalMessage = packet.message;
+          activeRunsByAgent.delete(agent);
+          return;
+        }
+        if (packet.type === "round.cancelled" || packet.type === "error") {
+          run.failed = true;
+          activeRunsByAgent.delete(agent);
+          return;
+        }
+
+        activeRunsByAgent.set(agent, run);
+      });
+
+      return runs;
+    }
+
+    function ensureProcessPanel(row, totalPackets, live = false) {
+      if (!row) return null;
+      const bubble = row.querySelector(".message-bubble");
+      const contentNode = row.querySelector(".message-content");
+      if (!bubble || !contentNode) return null;
+
+      let processPanel = row.querySelector("[data-inline-process]");
+      if (!processPanel) {
+        processPanel = document.createElement("details");
+        processPanel.className = `inline-process${live ? " is-live" : ""}`;
+        processPanel.dataset.inlineProcess = "";
+        processPanel.innerHTML = `
+          <summary class="inline-process-title">${live ? "执行过程" : `查看全过程（${totalPackets || 0} 条）`}</summary>
+          <div class="inline-process-list"></div>
+        `;
+        bubble.insertBefore(processPanel, contentNode);
+      }
+
+      processPanel.classList.toggle("is-live", live);
+      processPanel.dataset.fixedSummary = live ? "false" : "true";
+      const summaryNode = processPanel.querySelector(".inline-process-title");
+      if (summaryNode) {
+        summaryNode.textContent = live ? "执行过程" : `查看全过程（${totalPackets || 0} 条）`;
+      }
+      return processPanel;
+    }
+
+    function findMessageRowForRun(run, rowsBySpeaker, rowCursor) {
+      const rows = rowsBySpeaker[run.agent] || [];
+      let cursor = rowCursor[run.agent] || 0;
+      if (!rows.length || cursor >= rows.length) return null;
+
+      const targetText = String(run.finalMessage || "").trim();
+      if (targetText) {
+        for (let idx = cursor; idx < rows.length; idx += 1) {
+          const contentNode = rows[idx].querySelector(".message-content");
+          const rowText = String(contentNode?.textContent || "").trim();
+          if (rowText === targetText) {
+            rowCursor[run.agent] = idx + 1;
+            return rows[idx];
+          }
+        }
+      }
+
+      const fallback = rows[cursor];
+      rowCursor[run.agent] = cursor + 1;
+      return fallback;
+    }
+
     function renderEvents(events) {
+      pendingAgentBubble = null;
+      inlineProcessHost = null;
+      pendingAgentState = null;
+      if (!Array.isArray(events) || !events.length) return events;
+      messageStream.querySelectorAll("[data-inline-process]").forEach((node) => node.remove());
+      const runs = collectProcessRuns(events);
+
+      const rowsBySpeaker = {};
+      messageStream.querySelectorAll(".message-row[data-speaker]").forEach((row) => {
+        const speaker = row.dataset.speaker;
+        if (!rowsBySpeaker[speaker]) rowsBySpeaker[speaker] = [];
+        rowsBySpeaker[speaker].push(row);
+      });
+      const rowCursor = {};
+
+      runs.forEach((run) => {
+        if (!run.agent) return;
+        if (run.completed) {
+          const row = findMessageRowForRun(run, rowsBySpeaker, rowCursor);
+          if (!row) return;
+          const processPanel = ensureProcessPanel(row, run.packets.length, false);
+          if (!processPanel) return;
+          const list = processPanel.querySelector(".inline-process-list");
+          pendingAgentState = createProcessState(run.agent);
+          run.packets.forEach((packet) => appendProcessFragments(list, pendingAgentState, packet));
+          pendingAgentState = null;
+        }
+      });
+
+      if (currentSpeaker !== "user") {
+        const pendingRun = [...runs].reverse().find((run) => run.agent === currentSpeaker && !run.completed);
+        if (pendingRun) {
+          pendingAgentBubble = renderMessage({
+            speaker: currentSpeaker,
+            timestamp: "处理中",
+            content: `${displayName(currentSpeaker)} 正在继续处理…`,
+            pending: true,
+            withProcess: true,
+          });
+          inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
+          pendingAgentState = null;
+          pendingRun.packets.forEach((packet) => {
+            appendInlineProcess(packet);
+            if (packet.type === "agent.event") updatePendingBubble(packet);
+          });
+        }
+      }
       return events;
+    }
+
+    function isRoundAlreadyRunning(message) {
+      return typeof message === "string" && message.includes("自动回复链路在运行");
+    }
+
+    function isSnapshotRunning(snapshot) {
+      if (!snapshot?.state || snapshot.state.current_speaker === "user") return false;
+      return Object.values(snapshot.sessions || {}).some((session) => session?.status === "running");
+    }
+
+    async function fetchTopicSnapshot() {
+      const response = await fetch(`/api/topics/${topicSlug}/snapshot`, {
+        headers: { "Accept": "application/json" },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
     }
 
     function applySnapshot(snapshot) {
       rerenderMessages(snapshot.messages || []);
       restoreFailureBubble();
       renderSessions(snapshot.sessions);
-      renderEvents(snapshot.events);
       currentSpeaker = snapshot.state.current_speaker;
+      renderEvents(snapshot.events);
       const failedAgent = Object.entries(snapshot.sessions || {}).find(([, session]) => session?.status === "error")?.[0];
       if (preservedFailureBubble || failedAgent) {
         runStatus.textContent = `上一轮失败，当前停在 ${failedAgent || snapshot.state.current_speaker}。`;
@@ -1050,7 +1555,7 @@
               withProcess: true,
             });
             inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-            pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+            pendingAgentState = null;
             appendInlineProcess(packet);
           } else if (packet.type === "agent.event" && pendingAgentBubble) {
             updatePendingBubble(packet);
@@ -1079,6 +1584,14 @@
     }
 
     async function continuePendingRound() {
+      class ContinueRoundError extends Error {
+        constructor(message, code) {
+          super(message);
+          this.name = "ContinueRoundError";
+          this.code = code;
+        }
+      }
+
       currentAbortController = new AbortController();
       const response = await fetch(`/api/topics/${topicSlug}/continue-stream`, {
         method: "POST",
@@ -1091,6 +1604,7 @@
       const decoder = new TextDecoder();
       let buffer = "";
       let streamHadError = false;
+      let streamErrorMessage = "";
 
       while (true) {
         const { value, done } = await reader.read();
@@ -1112,7 +1626,7 @@
               withProcess: true,
             });
             inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-            pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+            pendingAgentState = null;
             appendInlineProcess(packet);
           } else if (packet.type === "agent.event" && pendingAgentBubble) {
             updatePendingBubble(packet);
@@ -1125,6 +1639,7 @@
             pendingAgentState = null;
           } else if (packet.type === "error") {
             streamHadError = true;
+            streamErrorMessage = packet.message || "未知错误";
             appendInlineProcess(packet);
             captureFailureBubble();
             runStatus.textContent = `继续失败：${packet.message}`;
@@ -1134,6 +1649,12 @@
             applySnapshot(packet);
           }
         }
+      }
+      if (streamHadError) {
+        throw new ContinueRoundError(
+          streamErrorMessage || "继续上一轮未完成回复时发生错误",
+          isRoundAlreadyRunning(streamErrorMessage) ? "already-running" : "stream-error"
+        );
       }
       if (!streamHadError) runStatus.textContent = "已自动补完上一轮未完成的回复。";
     }
@@ -1188,7 +1709,7 @@
                 withProcess: true,
               });
               inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-              pendingAgentState = { agent: packet.agent, textPreview: "", stepKeys: new Set(), packets: [], processNodes: new Map() };
+              pendingAgentState = null;
               appendInlineProcess(packet);
             } else if (packet.type === "agent.event" && pendingAgentBubble) {
               updatePendingBubble(packet);
@@ -1341,6 +1862,7 @@
     renderOrderChips();
     syncComposerControls();
     resizeComposer();
+    renderEvents(initialEvents);
     if ("{{ topic.state.current_speaker }}".trim() !== "user" && !autoContinuing) {
       autoContinuing = true;
       setRoundRunning(false);
@@ -1350,17 +1872,40 @@
         var maxRetries = 60; // 3s * 60 = 3 minutes max
         for (var i = 0; i < maxRetries; i++) {
           try {
+            var beforeSnap = await fetchTopicSnapshot();
+            applySnapshot(beforeSnap);
+            if (beforeSnap.state && beforeSnap.state.current_speaker === "user") {
+              runStatus.textContent = "后台任务已完成。";
+              break;
+            }
+            if (isSnapshotRunning(beforeSnap)) {
+              runStatus.textContent = `后台任务进行中，等待完成… (${i + 1})`;
+              await new Promise(function(r) { setTimeout(r, 3000); });
+              continue;
+            }
+
             await continuePendingRound();
-            break;
+            var afterSnap = await fetchTopicSnapshot();
+            applySnapshot(afterSnap);
+            if (afterSnap.state && afterSnap.state.current_speaker === "user") {
+              runStatus.textContent = "后台任务已完成。";
+              break;
+            }
           } catch (err) {
             if (err.name === "AbortError") break;
             // Check if speaker already back to user (backend finished while we waited)
             try {
-              var snap = await fetch("/api/topics/" + topicSlug + "/snapshot").then(function(r) { return r.json(); });
+              var snap = await fetchTopicSnapshot();
               if (snap.state && snap.state.current_speaker === "user") {
-                rerenderMessages(snap.messages || []);
+                applySnapshot(snap);
                 runStatus.textContent = "后台任务已完成。";
                 break;
+              }
+              if (err && err.code === "already-running") {
+                applySnapshot(snap);
+                runStatus.textContent = `后台任务进行中，等待完成… (${i + 1})`;
+                await new Promise(function(r) { setTimeout(r, 3000); });
+                continue;
               }
             } catch (_) {}
             runStatus.textContent = `后台任务进行中，等待重试… (${i + 1})`;

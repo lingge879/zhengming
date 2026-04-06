@@ -107,6 +107,7 @@ def workspace_files(slug: str) -> dict[str, Path]:
         "agents": root / "AGENTS.md",
         "claude": root / "CLAUDE.md",
         "artifacts": root / "artifacts",
+        "events": root / "events.jsonl",
     }
 
 
@@ -144,7 +145,6 @@ def ensure_workspace_initialized(slug: str) -> Path:
         write_text(files["claude"], default_claude_doc(root))
 
     (root / "README.md").unlink(missing_ok=True)
-    (root / "events.jsonl").unlink(missing_ok=True)
     migrate_workspace_docs(slug)
     return root
 
