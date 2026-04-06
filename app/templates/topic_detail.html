@@ -444,7 +444,7 @@
           if (!summaryNode) return;
           summaryNode.textContent = processNode.classList.contains("is-live")
             ? "执行过程"
-            : processToggleLabel(processNode.open);
+            : (processNode.open ? "收起过程" : "查看过程");
         });
       }
       scrollToBottomIfNeeded();
@@ -574,25 +574,11 @@
       const fragments = [];
 
       if (event.type === "thread.started") {
-        fragments.push(makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "low",
-          primaryText: "线程已建立",
-          secondaryText: event.thread_id || packet.session_id || "",
-        }));
+        return fragments;
       } else if (event.type === "turn.started") {
-        fragments.push(makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "low",
-          primaryText: "开始处理本轮输入",
-        }));
+        return fragments;
       } else if (event.type === "turn.completed") {
-        fragments.push(makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "low",
-          primaryText: "本轮处理完成",
-          secondaryText: formatUsage(event.usage),
-        }));
+        return fragments;
       } else if (event.type === "turn.failed") {
         fragments.push(makeFragment(packet, {
           stage: "error",
@@ -685,12 +671,7 @@
 
       if (event.type === "system") {
         if (event.subtype === "init") {
-          fragments.push(makeFragment(packet, {
-            stage: "lifecycle",
-            importance: "low",
-            primaryText: "会话初始化完成",
-            secondaryText: [event.session_id ? `session ${event.session_id}` : "", event.model ? `model ${event.model}` : ""].filter(Boolean).join(" · "),
-          }));
+          return fragments;
         } else if (event.subtype === "api_retry") {
           fragments.push(makeFragment(packet, {
             stage: "meta",
@@ -730,14 +711,7 @@
           }
         });
       } else if (event.type === "result") {
-        fragments.push(makeFragment(packet, {
-          stage: "meta",
-          importance: "medium",
-          primaryText: "结果已生成",
-          secondaryText: [event.subtype ? `subtype ${event.subtype}` : "", event.stop_reason ? `stop ${event.stop_reason}` : ""].filter(Boolean).join(" · "),
-          extraText: event.usage ? formatJson(event.usage) : "",
-          displayMode: event.usage ? "code" : "plain",
-        }));
+        return fragments;
       } else if (event.type === "error") {
         fragments.push(makeFragment(packet, {
           stage: "error",
@@ -747,18 +721,12 @@
       } else if (event.type === "stream_event") {
         const nested = event.event || {};
         if (nested.type === "message_start") {
-          fragments.push(makeFragment(packet, {
-            stage: "lifecycle",
-            importance: "low",
-            primaryText: "消息流开始",
-            secondaryText: [nested.message?.id ? `message ${nested.message.id}` : "", nested.message?.model ? nested.message.model : ""].filter(Boolean).join(" · "),
-          }));
+          return fragments;
         } else if (nested.type === "content_block_start") {
           fragments.push(makeFragment(packet, {
             stage: "lifecycle",
             importance: "low",
-            primaryText: `内容块开始`,
-            secondaryText: `index ${nested.index} · ${nested.content_block?.type || "unknown"}`,
+            primaryText: nested.content_block?.type === "thinking" ? "开始思考" : "开始生成回复",
           }));
         } else if (nested.type === "content_block_delta") {
           const delta = nested.delta || {};
@@ -791,25 +759,11 @@
             }));
           }
         } else if (nested.type === "content_block_stop") {
-          fragments.push(makeFragment(packet, {
-            stage: "lifecycle",
-            importance: "low",
-            primaryText: "内容块结束",
-            secondaryText: `index ${nested.index}`,
-          }));
+          return fragments;
         } else if (nested.type === "message_delta") {
-          fragments.push(makeFragment(packet, {
-            stage: "meta",
-            importance: "low",
-            primaryText: "消息元信息更新",
-            secondaryText: [nested.delta?.stop_reason ? `stop ${nested.delta.stop_reason}` : "", formatUsage(nested.usage || {})].filter(Boolean).join(" · "),
-          }));
+          return fragments;
         } else if (nested.type === "message_stop") {
-          fragments.push(makeFragment(packet, {
-            stage: "lifecycle",
-            importance: "low",
-            primaryText: "消息流结束",
-          }));
+          return fragments;
         } else if (nested.type === "error") {
           fragments.push(makeFragment(packet, {
             stage: "error",
@@ -831,48 +785,29 @@
         return [makeFragment(packet, {
           stage: "lifecycle",
           importance: "medium",
-          primaryText: `${displayName(packet.agent)} 开始本轮处理`,
-          secondaryText: [packet.turn_no != null ? `turn ${packet.turn_no}` : "", packet.session_id ? `session ${packet.session_id}` : ""].filter(Boolean).join(" · "),
+          primaryText: `${displayName(packet.agent)} 开始处理`,
         })];
       }
       if (packet.type === "run.started") {
         return [makeFragment(packet, {
           stage: "lifecycle",
           importance: "medium",
-          primaryText: `${displayName(packet.agent)} 启动本地 CLI`,
-          secondaryText: Array.isArray(packet.cmd) ? packet.cmd.join(" ") : "",
+          primaryText: Array.isArray(packet.cmd) && packet.cmd.includes("resume")
+            ? `${displayName(packet.agent)} 继续上一轮上下文`
+            : `${displayName(packet.agent)} 准备本轮上下文`,
         })];
       }
       if (packet.type === "run.completed") {
-        return [makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "medium",
-          primaryText: `${displayName(packet.agent)} 运行完成`,
-          secondaryText: packet.event_count != null ? `事件 ${packet.event_count} 条` : "",
-        })];
+        return [];
       }
       if (packet.type === "orchestrator.completed") {
-        return [makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "medium",
-          primaryText: `${displayName(packet.agent)} 已提交正式回复`,
-          secondaryText: [packet.next_speaker ? `next ${displayName(packet.next_speaker)}` : "", packet.turn_no != null ? `turn ${packet.turn_no}` : ""].filter(Boolean).join(" · "),
-        })];
+        return [];
       }
       if (packet.type === "round.started") {
-        return [makeFragment(packet, {
-          stage: "meta",
-          importance: "low",
-          primaryText: `本轮顺序：${(packet.agent_order || []).map(displayName).join(" → ")}`,
-        })];
+        return [];
       }
       if (packet.type === "round.resume") {
-        return [makeFragment(packet, {
-          stage: "meta",
-          importance: "medium",
-          primaryText: `继续上一轮未完成回复`,
-          secondaryText: packet.current_speaker ? displayName(packet.current_speaker) : "",
-        })];
+        return [];
       }
       if (packet.type === "round.cancelled" || packet.type === "error") {
         return [makeFragment(packet, {
@@ -1101,8 +1036,7 @@
         processPanel.dataset.fixedSummary = "true";
         const summaryNode = processPanel.querySelector(".inline-process-title");
         if (summaryNode) {
-          const total = pendingAgentState.packets?.length || 0;
-          summaryNode.textContent = total ? `查看全过程（${total} 条）` : "查看全过程";
+          summaryNode.textContent = "查看过程";
         }
       }
       mermaid.run({ nodes: pendingAgentBubble.querySelectorAll(".mermaid") }).catch(() => {});
@@ -1226,7 +1160,7 @@
         processPanel.className = `inline-process${live ? " is-live" : ""}`;
         processPanel.dataset.inlineProcess = "";
         processPanel.innerHTML = `
-          <summary class="inline-process-title">${live ? "执行过程" : `查看全过程（${totalPackets || 0} 条）`}</summary>
+          <summary class="inline-process-title">${live ? "执行过程" : "查看过程"}</summary>
           <div class="inline-process-list"></div>
         `;
         bubble.insertBefore(processPanel, contentNode);
@@ -1236,7 +1170,7 @@
       processPanel.dataset.fixedSummary = live ? "false" : "true";
       const summaryNode = processPanel.querySelector(".inline-process-title");
       if (summaryNode) {
-        summaryNode.textContent = live ? "执行过程" : `查看全过程（${totalPackets || 0} 条）`;
+        summaryNode.textContent = live ? "执行过程" : "查看过程";
       }
       return processPanel;
     }
