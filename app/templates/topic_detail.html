@@ -432,7 +432,7 @@
             <div class="inline-process-list"></div>
           </details>
           ` : ""}
-          <div class="message-content${pending && withProcess ? " is-hidden" : ""}">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
+          <div class="message-content">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
         </div>
       `;
       messageStream.appendChild(row);
@@ -521,19 +521,6 @@
         .trim();
     }
 
-    const STAGE_LABELS = {
-      lifecycle: "流程",
-      thinking: "思考",
-      message: "回复",
-      tool: "工具",
-      command: "命令",
-      file: "改动",
-      search: "检索",
-      todo: "待办",
-      error: "错误",
-      meta: "系统",
-    };
-
     function formatJson(value) {
       try {
         return JSON.stringify(value, null, 2);
@@ -542,13 +529,92 @@
       }
     }
 
-    function formatUsage(usage) {
-      if (!usage || typeof usage !== "object") return "";
-      const parts = [];
-      if (usage.input_tokens != null) parts.push(`input ${usage.input_tokens}`);
-      if (usage.cached_input_tokens != null) parts.push(`cached ${usage.cached_input_tokens}`);
-      if (usage.output_tokens != null) parts.push(`output ${usage.output_tokens}`);
-      return parts.join(" · ");
+    function shortenLine(text, max = 160) {
+      const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+      if (!normalized) return "";
+      return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
+    }
+
+    function parseJsonObject(rawText) {
+      const text = String(rawText ?? "").trim();
+      if (!text) return null;
+      try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function extractHostname(value) {
+      const text = String(value ?? "").trim();
+      if (!text) return "";
+      try {
+        return new URL(text).hostname.replace(/^www\./, "");
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function summarizePrompt(value) {
+      const text = shortenLine(value, 68);
+      if (!text) return "";
+      return `意图：${text}`;
+    }
+
+    function summarizeUrl(value) {
+      const hostname = extractHostname(value);
+      return hostname ? `站点：${hostname}` : "";
+    }
+
+    function summarizeValue(label, value) {
+      const text = typeof value === "string" ? value : formatJson(value);
+      const summary = shortenLine(text, 48);
+      return summary ? `${label}：${summary}` : "";
+    }
+
+    function formatToolParams(rawText) {
+      const parsed = parseJsonObject(rawText);
+      if (!parsed) return null;
+
+      const lines = [];
+      if (parsed.prompt) lines.push(summarizePrompt(parsed.prompt));
+      if (parsed.query && !parsed.prompt) lines.push(`查询：${shortenLine(parsed.query, 52)}`);
+      if (parsed.url) lines.push(summarizeUrl(parsed.url));
+      if (parsed.domains && Array.isArray(parsed.domains) && parsed.domains.length) {
+        lines.push(`范围：${shortenLine(parsed.domains.join(", "), 42)}`);
+      }
+      if (parsed.location && !parsed.url) lines.push(`位置：${shortenLine(parsed.location, 42)}`);
+      if (parsed.ticker) lines.push(summarizeValue("标的", parsed.ticker));
+      if (parsed.fn) lines.push(summarizeValue("动作", parsed.fn));
+      if (parsed.team) lines.push(summarizeValue("对象", parsed.team));
+      if (parsed.language_type) lines.push(summarizeValue("语言", parsed.language_type));
+      if (parsed.version_id) lines.push(summarizeValue("版本", parsed.version_id));
+
+      if (!lines.length) {
+        const [key, value] = Object.entries(parsed).find(([, candidate]) =>
+          candidate !== null && candidate !== undefined && candidate !== "" && !Array.isArray(candidate)
+        ) || [];
+        if (key) {
+          lines.push(summarizeValue(key, value));
+        }
+      }
+
+      return lines.filter(Boolean).slice(0, 2).join("\n");
+    }
+
+    function formatToolResult(rawValue) {
+      if (rawValue === null || rawValue === undefined || rawValue === "") return "";
+      const text = typeof rawValue === "string" ? rawValue : formatJson(rawValue);
+      return `结果：${shortenLine(text, 72)}`;
+    }
+
+    function resolveFragmentExtraText(fragment) {
+      if (!fragment.extraText) return "";
+      if (fragment.displayMode === "params") {
+        return formatToolParams(fragment.extraText) || "";
+      }
+      return fragment.extraText;
     }
 
     function makeFragment(packet, fragment) {
@@ -610,30 +676,39 @@
         fragments.push(makeFragment(packet, {
           stage: "command",
           importance: "high",
-          primaryText: item.command || "",
-          secondaryText: `状态：${item.status || "unknown"}${item.exit_code != null ? ` · 退出码 ${item.exit_code}` : ""}`,
-          extraText: item.aggregated_output || "",
-          displayMode: item.aggregated_output ? "code" : "plain",
+          primaryText: "执行命令",
+          secondaryText: extractShellIntent(item.command) || "",
+          extraText: item.aggregated_output ? `输出：${shortenLine(item.aggregated_output, 72)}` : "",
+          displayMode: "outcome",
           mergeKey: item.id ? `codex:command:${item.id}` : null,
           mergeStrategy: "replace",
         }));
       } else if (item.type === "file_change") {
-        const changes = Array.isArray(item.changes) ? item.changes.map((change) => `${change.kind} ${change.path}`).join("\n") : "";
+        const changes = Array.isArray(item.changes)
+          ? item.changes.map((change) => `${change.kind} ${change.path}`).join("\n")
+          : "";
         fragments.push(makeFragment(packet, {
           stage: "file",
           importance: "medium",
-          primaryText: "文件变更",
+          primaryText: "改动文件",
           extraText: changes,
           displayMode: "list",
         }));
       } else if (item.type === "mcp_tool_call") {
+        const toolName = [item.server, item.tool].filter(Boolean).join(".");
+        const toolParams = item.arguments ? formatToolParams(formatJson(item.arguments)) : "";
+        const toolResult = formatToolResult(item.result);
         fragments.push(makeFragment(packet, {
           stage: "tool",
           importance: "high",
-          primaryText: `${item.server}.${item.tool}`,
-          secondaryText: `状态：${item.status || "unknown"}`,
-          extraText: item.error?.message || formatJson(item.result || item.arguments || ""),
-          displayMode: typeof item.error?.message === "string" ? "plain" : "code",
+          primaryText: toolName ? `调用工具 ${toolName}` : "调用工具",
+          secondaryText: item.status === "completed"
+            ? "已完成"
+            : item.status === "in_progress"
+              ? "执行中"
+              : item.status || "",
+          extraText: item.error?.message || toolParams || toolResult,
+          displayMode: item.error?.message ? "outcome" : "params",
           mergeKey: item.id ? `codex:mcp:${item.id}` : null,
           mergeStrategy: "replace",
         }));
@@ -641,16 +716,16 @@
         fragments.push(makeFragment(packet, {
           stage: "search",
           importance: "medium",
-          primaryText: item.query || "",
+          primaryText: "检索信息",
+          secondaryText: shortenLine(item.query || "", 56),
         }));
       } else if (item.type === "todo_list") {
-        const listText = Array.isArray(item.items) ? item.items.map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`).join("\n") : "";
+        const pendingCount = Array.isArray(item.items) ? item.items.filter((todo) => !todo.completed).length : 0;
         fragments.push(makeFragment(packet, {
           stage: "todo",
           importance: "medium",
-          primaryText: "待办列表",
-          extraText: listText,
-          displayMode: "list",
+          primaryText: "更新待办",
+          secondaryText: pendingCount ? `剩余 ${pendingCount} 项` : "已全部完成",
           mergeKey: item.id ? `codex:todo:${item.id}` : null,
           mergeStrategy: "replace",
         }));
@@ -674,16 +749,12 @@
           return fragments;
         } else if (event.subtype === "api_retry") {
           fragments.push(makeFragment(packet, {
-            stage: "meta",
+            stage: "error",
             importance: "high",
-            primaryText: "API 重试",
-            secondaryText: `第 ${event.attempt}/${event.max_retries} 次 · status ${event.error_status || ""} · ${event.error || ""}`.trim(),
-          }));
-        } else {
-          fragments.push(makeFragment(packet, {
-            stage: "meta",
-            importance: "medium",
-            primaryText: `系统事件：${event.subtype || "system"}`,
+            primaryText: "请求重试",
+            secondaryText: `第 ${event.attempt}/${event.max_retries} 次`,
+            extraText: shortenLine(`${event.error_status || ""} ${event.error || ""}`.trim(), 72),
+            displayMode: "outcome",
           }));
         }
       } else if (event.type === "assistant") {
@@ -723,11 +794,16 @@
         if (nested.type === "message_start") {
           return fragments;
         } else if (nested.type === "content_block_start") {
-          fragments.push(makeFragment(packet, {
-            stage: "lifecycle",
-            importance: "low",
-            primaryText: nested.content_block?.type === "thinking" ? "开始思考" : "开始生成回复",
-          }));
+          if (nested.content_block?.type === "tool_use") {
+            fragments.push(makeFragment(packet, {
+              stage: "tool",
+              importance: "high",
+              primaryText: `调用工具 ${nested.content_block.name || ""}`.trim(),
+              secondaryText: "准备参数",
+              mergeKey: `claude:tool:${packet.run_id || "run"}:${nested.index}`,
+              mergeStrategy: "replace",
+            }));
+          }
         } else if (nested.type === "content_block_delta") {
           const delta = nested.delta || {};
           if (delta.type === "text_delta" && delta.text) {
@@ -751,10 +827,10 @@
             fragments.push(makeFragment(packet, {
               stage: "tool",
               importance: "high",
-              primaryText: "工具输入参数增量",
+              primaryText: "调用工具",
               extraText: delta.partial_json || "",
-              displayMode: "code",
-              mergeKey: `claude:input-json:${packet.run_id || "run"}:${nested.index}`,
+              displayMode: "params",
+              mergeKey: `claude:tool:${packet.run_id || "run"}:${nested.index}`,
               mergeStrategy: "append",
             }));
           }
@@ -782,20 +858,10 @@
       const isStoredRawLine = !packet.type && packet.raw_line && (packet.source === "codex_cli" || packet.source === "claude_cli");
 
       if (packet.type === "orchestrator.started") {
-        return [makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "medium",
-          primaryText: `${displayName(packet.agent)} 开始处理`,
-        })];
+        return [];
       }
       if (packet.type === "run.started") {
-        return [makeFragment(packet, {
-          stage: "lifecycle",
-          importance: "medium",
-          primaryText: Array.isArray(packet.cmd) && packet.cmd.includes("resume")
-            ? `${displayName(packet.agent)} 继续上一轮上下文`
-            : `${displayName(packet.agent)} 准备本轮上下文`,
-        })];
+        return [];
       }
       if (packet.type === "run.completed") {
         return [];
@@ -821,22 +887,12 @@
         if (packet.agent === "claudecode") return buildClaudeFragments(packet);
       }
       if (packet.type === "agent.raw_line" || isStoredRawLine) {
-        return [makeFragment(packet, {
-          stage: "meta",
-          importance: "low",
-          primaryText: "原始输出",
-          extraText: packet.raw_line || "",
-          displayMode: "code",
-        })];
+        return [];
       }
       if (!packet.type && packet.summary) {
         return [];
       }
-      return [makeFragment(packet, {
-        stage: "meta",
-        importance: "low",
-        primaryText: packet.type || "event",
-      })];
+      return [];
     }
 
     function renderFragmentText(fragment) {
@@ -845,14 +901,13 @@
       return escapeHtml(fragment.primaryText).replaceAll("\n", "<br>");
     }
 
+    function isRenderableProcessFragment(fragment) {
+      return fragment.stage !== "message";
+    }
+
     function buildActivityNode(fragment) {
       const node = document.createElement("div");
       node.className = `process-activity${fragment.stage === "error" ? " is-error" : ""}`;
-
-      const badgeEl = document.createElement("div");
-      badgeEl.className = `process-activity-badge is-${fragment.stage || "meta"}`;
-      badgeEl.textContent = STAGE_LABELS[fragment.stage] || "系统";
-      node.appendChild(badgeEl);
 
       if (fragment.primaryText) {
         const detailEl = document.createElement("div");
@@ -868,40 +923,39 @@
         node.appendChild(secondaryEl);
       }
 
-      if (fragment.extraText) {
-        const extraEl = document.createElement(fragment.displayMode === "code" ? "pre" : "div");
-        extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
-        extraEl.textContent = fragment.extraText;
+      const resolvedExtraText = resolveFragmentExtraText(fragment);
+      if (resolvedExtraText) {
+        const extraEl = document.createElement("div");
+        extraEl.className = fragment.displayMode === "params"
+          ? "process-tool-params"
+          : (fragment.displayMode === "list" ? "process-activity-list" : "process-outcome");
+        extraEl.textContent = resolvedExtraText;
         node.appendChild(extraEl);
       }
 
-      const rawWrap = document.createElement("details");
-      rawWrap.className = "process-raw-wrap";
-      const rawSummary = document.createElement("summary");
-      rawSummary.textContent = "原始事件";
-      rawWrap.appendChild(rawSummary);
-      const rawEl = document.createElement("pre");
-      rawEl.className = "process-raw";
-      rawEl.textContent = formatJson(fragment.rawEvent);
-      rawWrap.appendChild(rawEl);
-      node.appendChild(rawWrap);
+      if (fragment.stage === "error") {
+        const rawWrap = document.createElement("details");
+        rawWrap.className = "process-raw-wrap";
+        const rawSummary = document.createElement("summary");
+        rawSummary.textContent = "原始事件";
+        rawWrap.appendChild(rawSummary);
+        const rawEl = document.createElement("pre");
+        rawEl.className = "process-raw";
+        rawEl.textContent = formatJson(fragment.rawEvent);
+        rawWrap.appendChild(rawEl);
+        node.appendChild(rawWrap);
+      }
 
       return node;
     }
 
     function updateActivityNode(node, fragment) {
-      const badgeEl = node.querySelector(".process-activity-badge");
-      if (badgeEl) {
-        badgeEl.className = `process-activity-badge is-${fragment.stage || "meta"}`;
-        badgeEl.textContent = STAGE_LABELS[fragment.stage] || "系统";
-      }
-
       let detailEl = node.querySelector(".process-activity-detail");
       if (fragment.primaryText) {
         if (!detailEl) {
           detailEl = document.createElement("div");
           detailEl.className = "process-activity-detail";
-          node.insertBefore(detailEl, node.querySelector(".process-activity-secondary"));
+          node.insertBefore(detailEl, node.firstChild);
         }
         detailEl.innerHTML = renderFragmentText(fragment);
       } else if (detailEl) {
@@ -920,21 +974,26 @@
         secondaryEl.remove();
       }
 
-      let extraEl = node.querySelector(".process-outcome, .process-activity-list");
-      if (fragment.extraText) {
+      let extraEl = node.querySelector(".process-outcome, .process-activity-list, .process-tool-params");
+      const resolvedExtraText = resolveFragmentExtraText(fragment);
+      if (resolvedExtraText) {
         if (!extraEl) {
           extraEl = document.createElement(fragment.displayMode === "code" ? "pre" : "div");
-          extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
+          extraEl.className = fragment.displayMode === "params"
+            ? "process-tool-params"
+            : (fragment.displayMode === "list" ? "process-activity-list" : "process-outcome");
           node.appendChild(extraEl);
         }
-        extraEl.className = fragment.displayMode === "list" ? "process-activity-list" : "process-outcome";
-        extraEl.textContent = fragment.extraText;
+        extraEl.className = fragment.displayMode === "params"
+          ? "process-tool-params"
+          : (fragment.displayMode === "list" ? "process-activity-list" : "process-outcome");
+        extraEl.textContent = resolvedExtraText;
       } else if (extraEl) {
         extraEl.remove();
       }
 
       let rawEl = node.querySelector(".process-raw");
-      if (!rawEl) {
+      if (fragment.stage === "error" && !rawEl) {
         const rawWrap = document.createElement("details");
         rawWrap.className = "process-raw-wrap";
         const rawSummary = document.createElement("summary");
@@ -945,22 +1004,29 @@
         rawWrap.appendChild(rawEl);
         node.appendChild(rawWrap);
       }
-      rawEl.textContent = formatJson(fragment.rawEvent);
+      if (fragment.stage === "error" && rawEl) {
+        rawEl.textContent = formatJson(fragment.rawEvent);
+      } else if (rawEl) {
+        rawEl.closest(".process-raw-wrap")?.remove();
+      }
 
       node.classList.toggle("is-error", fragment.stage === "error");
     }
 
     function appendProcessFragments(list, state, packet) {
-      const fragments = packetToFragments(packet);
+      const fragments = packetToFragments(packet).filter(isRenderableProcessFragment);
       state.packets.push(packet);
       fragments.forEach((fragment) => {
         state.stats[fragment.stage] = (state.stats[fragment.stage] || 0) + 1;
         if (fragment.mergeKey && state.fragmentNodes.has(fragment.mergeKey)) {
           const existing = state.fragmentNodes.get(fragment.mergeKey);
           if (fragment.mergeStrategy === "append") {
+            const shouldAppendPrimary = fragment.stage === "thinking" || fragment.stage === "message";
             const merged = {
               ...fragment,
-              primaryText: `${existing.fragment.primaryText || ""}${fragment.primaryText || ""}`,
+              primaryText: shouldAppendPrimary
+                ? `${existing.fragment.primaryText || ""}${fragment.primaryText || ""}`
+                : (existing.fragment.primaryText || fragment.primaryText || ""),
               extraText: `${existing.fragment.extraText || ""}${fragment.extraText || ""}`,
             };
             existing.fragment = merged;
@@ -1075,6 +1141,10 @@
             }
           }
         }
+      }
+      if (state.textPreview) {
+        contentNode.innerHTML = renderMarkdown(state.textPreview);
+        contentNode.classList.remove("is-hidden");
       }
       const fragments = packetToFragments(packet);
       if (fragments.some((fragment) => fragment.stage === "error")) {
@@ -1263,6 +1333,16 @@
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
+    }
+
+    async function refreshTopicSnapshotSafely() {
+      try {
+        const snapshot = await fetchTopicSnapshot();
+        applySnapshot(snapshot);
+        return snapshot;
+      } catch (_) {
+        return null;
+      }
     }
 
     function applySnapshot(snapshot) {
@@ -1514,6 +1594,7 @@
           }
         }
       }
+      await refreshTopicSnapshotSafely();
       if (!streamHadError) runStatus.textContent = "本轮已自动跑完全部 agent。";
     }
 
@@ -1585,11 +1666,13 @@
         }
       }
       if (streamHadError) {
+        await refreshTopicSnapshotSafely();
         throw new ContinueRoundError(
           streamErrorMessage || "继续上一轮未完成回复时发生错误",
           isRoundAlreadyRunning(streamErrorMessage) ? "already-running" : "stream-error"
         );
       }
+      await refreshTopicSnapshotSafely();
       if (!streamHadError) runStatus.textContent = "已自动补完上一轮未完成的回复。";
     }
 
@@ -1666,6 +1749,7 @@
             }
           }
         }
+        await refreshTopicSnapshotSafely();
         if (!streamHadError) runStatus.textContent = `${displayName(agent)} 已完成继续发言。`;
       } catch (error) {
         if (error.name !== "AbortError") {
