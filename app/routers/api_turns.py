@@ -153,15 +153,6 @@ def run_full_round_stream(
     gen = stream_full_round(slug, content.strip(), order)
     return StreamingResponse(_run_generator_in_background(gen, slug), media_type="application/x-ndjson")
 
-
-@router.post("/cancel")
-def cancel_round(slug: str):
-    try:
-        cancel_topic(slug)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"ok": True}
-
 @router.post("/nudge-stream")
 def nudge_agent_stream(slug: str, agent: str = Form(...)):
     try:
@@ -175,12 +166,3 @@ def nudge_agent_stream(slug: str, agent: str = Form(...)):
 def continue_round_stream(slug: str):
     gen = stream_continue_round(slug)
     return StreamingResponse(_run_generator_in_background(gen, slug), media_type="application/x-ndjson")
-
-
-@router.post("/cancel")
-def cancel_round(slug: str):
-    try:
-        cancel_topic(slug)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"ok": True}

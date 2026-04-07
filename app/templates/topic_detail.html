@@ -408,6 +408,8 @@
     }
 
     function renderMessage({ speaker, timestamp, content, pending = false, withProcess = false, markdown = !pending }) {
+      const normalizedContent = typeof content === "string" ? content : "";
+      const shouldHideContent = pending && !normalizedContent.trim();
       const row = document.createElement("article");
       row.className = `message-row speaker-${speaker.toLowerCase()}${pending ? " is-pending" : ""}`;
       row.dataset.speaker = speaker;
@@ -433,7 +435,7 @@
             <div class="inline-process-list"></div>
           </details>
           ` : ""}
-          <div class="message-content">${markdown ? renderMarkdown(content) : escapeHtml(content).replaceAll("\n", "<br>")}</div>
+          <div class="message-content${shouldHideContent ? " is-hidden" : ""}">${markdown ? renderMarkdown(normalizedContent) : escapeHtml(normalizedContent).replaceAll("\n", "<br>")}</div>
         </div>
       `;
       messageStream.appendChild(row);
@@ -919,18 +921,7 @@
 
     function makeProcessDisplayFragment(fragment) {
       if (!fragment) return null;
-      if (fragment.stage === "message") {
-        const preview = shortenLine(fragment.primaryText, 42);
-        const normalized = String(fragment.primaryText || "").replace(/\s+/g, " ").trim();
-        if (normalized.length < 12) return null;
-        return {
-          ...fragment,
-          primaryText: "",
-          secondaryText: preview ? `已产出：${preview}` : "已产出内容",
-          extraText: "",
-          displayMode: "plain",
-        };
-      }
+      if (fragment.stage === "message") return null;
       return fragment;
     }
 
@@ -1085,6 +1076,19 @@
       if (!list) return;
       const state = ensurePendingState(packet.agent || pendingAgentState?.agent || "");
       appendProcessFragments(list, state, packet);
+    }
+
+    function createPendingBubble(agent) {
+      pendingAgentBubble = renderMessage({
+        speaker: agent,
+        timestamp: "处理中",
+        content: "",
+        pending: true,
+        withProcess: true,
+      });
+      inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
+      pendingAgentState = null;
+      return pendingAgentBubble;
     }
 
     function captureFailureBubble() {
@@ -1339,15 +1343,7 @@
       if (runningAgent) {
         const pendingRun = [...runs].reverse().find((run) => run.agent === runningAgent && !run.completed);
         if (pendingRun) {
-          pendingAgentBubble = renderMessage({
-            speaker: runningAgent,
-            timestamp: "处理中",
-            content: `${displayName(runningAgent)} 正在继续处理…`,
-            pending: true,
-            withProcess: true,
-          });
-          inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-          pendingAgentState = null;
+          createPendingBubble(runningAgent);
           pendingRun.packets.forEach((packet) => {
             appendInlineProcess(packet);
             if (packet.type === "agent.event") updatePendingBubble(packet);
@@ -1600,15 +1596,7 @@
           const packet = JSON.parse(line);
 
           if (packet.type === "orchestrator.started") {
-            pendingAgentBubble = renderMessage({
-              speaker: packet.agent,
-              timestamp: "处理中",
-              content: `${packet.agent} 正在读取完整上下文并准备回复…`,
-              pending: true,
-              withProcess: true,
-            });
-            inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-            pendingAgentState = null;
+            createPendingBubble(packet.agent);
             appendInlineProcess(packet);
           } else if (packet.type === "agent.event" && pendingAgentBubble) {
             updatePendingBubble(packet);
@@ -1672,15 +1660,7 @@
           const packet = JSON.parse(line);
 
           if (packet.type === "orchestrator.started") {
-            pendingAgentBubble = renderMessage({
-              speaker: packet.agent,
-              timestamp: "处理中",
-              content: `${packet.agent} 正在继续上一次未完成的轮次…`,
-              pending: true,
-              withProcess: true,
-            });
-            inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-            pendingAgentState = null;
+            createPendingBubble(packet.agent);
             appendInlineProcess(packet);
           } else if (packet.type === "agent.event" && pendingAgentBubble) {
             updatePendingBubble(packet);
@@ -1757,15 +1737,7 @@
             const packet = JSON.parse(line);
 
             if (packet.type === "orchestrator.started") {
-              pendingAgentBubble = renderMessage({
-                speaker: packet.agent,
-                timestamp: "处理中",
-                content: `${displayName(packet.agent)} 正在继续发言…`,
-                pending: true,
-                withProcess: true,
-              });
-              inlineProcessHost = pendingAgentBubble.querySelector("[data-inline-process]");
-              pendingAgentState = null;
+              createPendingBubble(packet.agent);
               appendInlineProcess(packet);
             } else if (packet.type === "agent.event" && pendingAgentBubble) {
               updatePendingBubble(packet);
