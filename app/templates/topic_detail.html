@@ -1795,7 +1795,9 @@
       runStatus.textContent = `已出言，准备按 ${chosenAgents.join(" -> ")} 自动全回复`;
       setRoundRunning(true);
       _userScrolledUp = false;
+      _scrollHideEnabled = false;
       renderMessage({ speaker: "user", timestamp: "刚刚", content });
+      setTimeout(() => { _scrollHideEnabled = true; }, 600);
       userMessageInput.value = "";
       resizeComposer();
 
