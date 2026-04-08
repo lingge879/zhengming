@@ -124,6 +124,22 @@ def sync_topic_index(slug: str) -> None:
     remove_legacy_workspace_files(slug)
 
 
+def _try_relocate_workspace(slug: str, stale_path: Path) -> Path | None:
+    """If the DB path is stale, try to find the workspace under current WORKSPACES_DIR or LEGACY_TOPICS_DIR."""
+    for base in (WORKSPACES_DIR, LEGACY_TOPICS_DIR):
+        candidate = base / slug
+        if candidate.exists():
+            return candidate
+    # Also try matching by directory name from the stale path
+    dir_name = stale_path.name
+    if dir_name != slug:
+        for base in (WORKSPACES_DIR, LEGACY_TOPICS_DIR):
+            candidate = base / dir_name
+            if candidate.exists():
+                return candidate
+    return None
+
+
 def sync_all_topics() -> None:
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
@@ -138,6 +154,14 @@ def sync_all_topics() -> None:
         slug = row["slug"]
         workspace_path = Path(row["workspace_path"]) if row["workspace_path"] else topic_path(slug)
         if workspace_path.exists():
+            sync_topic_index(slug)
+            continue
+        # Path is stale — try to relocate before deleting
+        relocated = _try_relocate_workspace(slug, workspace_path)
+        if relocated is not None:
+            with get_conn() as conn:
+                conn.execute("UPDATE topics SET workspace_path = ? WHERE slug = ?", (str(relocated), slug))
+                conn.commit()
             sync_topic_index(slug)
             continue
         with get_conn() as conn:
