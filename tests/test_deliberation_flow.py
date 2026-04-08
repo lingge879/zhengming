@@ -18,6 +18,7 @@ from app.services import orchestrator
 from app.services.agent_state_service import load_agent_states
 from app.services.discussion_service import read_messages
 from app.services.message_service import append_message
+from app.services.session_service import load_sessions
 from app.services.state_service import load_state
 from app.services.topic_service import create_topic, sync_topic_index
 from app.services.workspace_service import (
@@ -288,6 +289,9 @@ def test_start_session_creates_topic_and_first_message():
         state = load_state(slug)
         assert state["title"] == "这是新会话的第一句话"
         assert state["current_speaker"] == "codex"
+        sessions = load_sessions(slug)
+        assert sessions["codex"]["status"] == "pending"
+        assert sessions["claudecode"]["status"] == "idle"
     finally:
         _cleanup_topic(slug)
 
@@ -305,6 +309,29 @@ def test_start_session_respects_selected_agent_order():
         state = load_state(slug)
         assert state["speaker_order"] == ["user", "claudecode"]
         assert state["current_speaker"] == "claudecode"
+        sessions = load_sessions(slug)
+        assert sessions["claudecode"]["status"] == "pending"
+        assert sessions["codex"]["status"] == "idle"
+    finally:
+        _cleanup_topic(slug)
+
+
+def test_topic_snapshot_exposes_pending_agent_after_start_session():
+    client = TestClient(app)
+    response = client.post(
+        "/api/topics/start-session",
+        data={"content": "首页首条消息", "agent_order": "codex,claudecode"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    slug = unquote(response.headers["location"].removeprefix("/topics/"))
+    try:
+        snapshot = client.get(f"/api/topics/{slug}/snapshot")
+        assert snapshot.status_code == 200
+        payload = snapshot.json()
+        assert payload["state"]["current_speaker"] == "codex"
+        assert payload["sessions"]["codex"]["status"] == "pending"
+        assert payload["sessions"]["claudecode"]["status"] == "idle"
     finally:
         _cleanup_topic(slug)
 

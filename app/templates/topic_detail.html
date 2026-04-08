@@ -1201,6 +1201,12 @@
       return entry ? entry[0] : null;
     }
 
+    function getPendingAgent(sessions) {
+      if (!sessions || typeof sessions !== "object") return null;
+      const entry = Object.entries(sessions).find(([, session]) => session?.status === "pending");
+      return entry ? entry[0] : null;
+    }
+
     function collectProcessRuns(events) {
       const runs = [];
       const runsById = new Map();
@@ -1894,14 +1900,30 @@
     resizeComposer();
     applySnapshot(initialSnapshot);
 
+    function getPendingSpeaker(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") return null;
+      const failedAgent = Object.entries(snapshot.sessions || {}).find(([, session]) => session?.status === "error")?.[0];
+      if (failedAgent) return null;
+
+      const runningAgent = getRunningAgent(snapshot.sessions || {});
+      if (runningAgent) return runningAgent;
+
+      const pendingAgent = getPendingAgent(snapshot.sessions || {});
+      if (pendingAgent) return pendingAgent;
+
+      const currentSpeaker = String(snapshot.state?.current_speaker || "").trim();
+      if (currentSpeaker && currentSpeaker !== "user") return currentSpeaker;
+      return null;
+    }
+
     (async function bootstrapSnapshotState() {
       const freshSnapshot = await refreshTopicSnapshotSafely();
       const effectiveSnapshot = freshSnapshot || initialSnapshot;
-      const runningAgent = getRunningAgent(effectiveSnapshot.sessions || {});
-      if (!runningAgent || autoContinuing) return;
+      const pendingSpeaker = getPendingSpeaker(effectiveSnapshot);
+      if (!pendingSpeaker || autoContinuing) return;
       autoContinuing = true;
       setRoundRunning(false);
-      runStatus.textContent = `检测到当前停在 ${displayName(runningAgent)}，等待后台任务完成…`;
+      runStatus.textContent = `检测到当前停在 ${displayName(pendingSpeaker)}，准备续跑…`;
 
       (async function waitAndContinue() {
         var maxRetries = 60; // 3s * 60 = 3 minutes max

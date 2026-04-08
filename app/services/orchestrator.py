@@ -32,6 +32,22 @@ class CancelledError(Exception):
     pass
 
 
+def _set_pending_agent(slug: str, agent: str | None) -> None:
+    sessions = load_sessions(slug)
+    for agent_id in ("codex", "claudecode"):
+        if agent_id == agent:
+            update_session(slug, agent_id, status="pending")
+        else:
+            current_status = sessions.get(agent_id, {}).get("status")
+            if current_status not in {"running", "error"}:
+                update_session(slug, agent_id, status="idle")
+
+
+def _sync_agent_states_after_turn(slug: str, current_speaker: str) -> None:
+    next_agent = current_speaker if current_speaker in {"codex", "claudecode"} else None
+    _set_pending_agent(slug, next_agent)
+
+
 def _get_topic_lock(slug: str) -> Lock:
     lock = _TOPIC_RUN_LOCKS.get(slug)
     if lock is None:
@@ -212,7 +228,7 @@ def run_current_agent(slug: str) -> AgentRunResult:
         session_id=result.session_id,
         last_read_message_id=appended["id"],
         last_delivered_message_id=appended["id"],
-        status="active",
+        status="idle",
     )
     update_prompt_delivery(
         delivery["id"],
@@ -238,6 +254,8 @@ def run_current_agent(slug: str) -> AgentRunResult:
         },
     )
     advance_speaker(slug)
+    next_state = load_state(slug)
+    _sync_agent_states_after_turn(slug, next_state["current_speaker"])
     sync_topic_index(slug)
     return result
 
@@ -330,7 +348,7 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         session_id=result.session_id,
         last_read_message_id=appended["id"],
         last_delivered_message_id=appended["id"],
-        status="active",
+        status="idle",
     )
     update_prompt_delivery(
         delivery["id"],
@@ -356,6 +374,7 @@ def stream_current_agent(slug: str) -> Iterator[dict]:
         },
     )
     state = advance_speaker(slug)
+    _sync_agent_states_after_turn(slug, state["current_speaker"])
     sync_topic_index(slug)
     logger.info("[%s] orchestrator.completed agent=%s message_len=%d next=%s", slug, agent, len(result.message or ""), state["current_speaker"])
     yield {
@@ -389,7 +408,18 @@ def handle_user_message(slug: str, content: str) -> None:
     appended = append_message(slug, "user", content)
     state["last_message_id"] = appended["id"]
     save_state(slug, state)
+    append_event(
+        slug,
+        {
+            "type": "user.message",
+            "message_id": appended["id"],
+            "content": content,
+            "ts": now_iso(),
+        },
+    )
     advance_speaker(slug)
+    next_state = load_state(slug)
+    _sync_agent_states_after_turn(slug, next_state["current_speaker"])
     sync_topic_index(slug)
 
 
@@ -425,6 +455,7 @@ def stream_full_round(slug: str, content: str, agent_order: list[str]) -> Iterat
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             _TOPIC_CANCEL_FLAGS.pop(slug, None)
             yield {"type": "round.cancelled", "message": "已取消"}
@@ -434,6 +465,7 @@ def stream_full_round(slug: str, content: str, agent_order: list[str]) -> Iterat
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             yield {"type": "error", "message": str(exc)}
 
@@ -463,6 +495,7 @@ def stream_continue_round(slug: str) -> Iterator[dict]:
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             _TOPIC_CANCEL_FLAGS.pop(slug, None)
             yield {"type": "round.cancelled", "message": "已取消"}
@@ -472,6 +505,7 @@ def stream_continue_round(slug: str) -> Iterator[dict]:
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             yield {"type": "error", "message": str(exc)}
 
@@ -506,6 +540,7 @@ def stream_nudge_agent(slug: str, agent: str) -> Iterator[dict]:
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             _TOPIC_CANCEL_FLAGS.pop(slug, None)
             yield {"type": "round.cancelled", "message": "已取消"}
@@ -516,6 +551,7 @@ def stream_nudge_agent(slug: str, agent: str) -> Iterator[dict]:
             state = load_state(slug)
             state["current_speaker"] = "user"
             save_state(slug, state)
+            _sync_agent_states_after_turn(slug, state["current_speaker"])
             sync_topic_index(slug)
             yield {"type": "error", "message": str(exc)}
             return
@@ -525,4 +561,5 @@ def stream_nudge_agent(slug: str, agent: str) -> Iterator[dict]:
         state = load_state(slug)
         state["current_speaker"] = "user"
         save_state(slug, state)
+        _sync_agent_states_after_turn(slug, state["current_speaker"])
         sync_topic_index(slug)
